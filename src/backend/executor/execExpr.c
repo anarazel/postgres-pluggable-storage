@@ -753,8 +753,13 @@ ExecInitExprRec(Expr *node, ExprState *state,
 							params = NULL;
 						if (params && params->paramCompile)
 						{
-							params->paramCompile(params, param, state,
-												 resv, resnull);
+							scratch.opcode = EEOP_PARAM_CALLBACK;
+							scratch.d.cparam.paramarg = NULL;
+							scratch.d.cparam.paramid = param->paramid;
+							scratch.d.cparam.paramtype = param->paramtype;
+							scratch.d.cparam.paramfunc =
+								params->paramCompile(params, param, state);
+							ExprEvalPushStep(state, &scratch);
 						}
 						else
 						{

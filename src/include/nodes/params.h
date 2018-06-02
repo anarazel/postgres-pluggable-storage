@@ -68,7 +68,10 @@ struct ParseState;
  *	  in trying to fetch the parameter value, and should report an invalid
  *	  parameter instead.
  *
- *	  If paramCompile isn't null, then it controls what execExpr.c compiles
+ *	  If paramCompile isn't null, then execExpr.c generates a
+ *	  EEOP_PARAM_CALLBACK step for the parameter, that will call the function
+ *	  returned by the ParamCompileHook.
+
  *	  for PARAM_EXTERN Param nodes --- typically, this hook would emit a
  *	  EEOP_PARAM_CALLBACK step.  This allows unnecessary work to be
  *	  optimized away in compiled expressions.
@@ -101,9 +104,15 @@ typedef ParamExternData *(*ParamFetchHook) (ParamListInfo params,
 											int paramid, bool speculative,
 											ParamExternData *workspace);
 
-typedef void (*ParamCompileHook) (ParamListInfo params, struct Param *param,
-								  struct ExprState *state,
-								  Datum *resv, bool *resnull);
+struct ExprEvalStep;
+struct ExprContext;
+typedef Datum (*ExecEvalSubroutine) (struct ExprState *state,
+									 struct ExprEvalStep *op,
+									 struct ExprContext *econtext,
+									 bool *isnull);
+
+typedef ExecEvalSubroutine (*ParamCompileHook) (ParamListInfo params, struct Param *param,
+												struct ExprState *state);
 
 typedef void (*ParserSetupHook) (struct ParseState *pstate, void *arg);
 

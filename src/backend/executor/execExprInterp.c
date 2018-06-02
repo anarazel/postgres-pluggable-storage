@@ -1003,7 +1003,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		EEO_CASE(EEOP_PARAM_CALLBACK)
 		{
 			/* allow an extension module to supply a PARAM_EXTERN value */
-			op->d.cparam.paramfunc(state, op, econtext);
+			*op->resvalue = op->d.cparam.paramfunc(state, op, econtext, op->resnull);
 			EEO_NEXT();
 		}
 

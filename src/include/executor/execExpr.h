@@ -28,9 +28,10 @@ struct ArrayRefState;
 #define EEO_FLAG_DIRECT_THREADED			(1 << 2)
 
 /* Typical API for out-of-line evaluation subroutines */
-typedef void (*ExecEvalSubroutine) (ExprState *state,
-									struct ExprEvalStep *op,
-									ExprContext *econtext);
+typedef Datum (*ExecEvalSubroutine) (ExprState *state,
+									 struct ExprEvalStep *op,
+									 ExprContext *econtext,
+									 bool *isnull);
 
 /*
  * Discriminator for ExprEvalSteps.
