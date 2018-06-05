@@ -8598,7 +8598,11 @@ validateForeignKeyConstraint(char *conname,
 
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
-		FunctionCallInfoData fcinfo;
+		union {
+			FunctionCallInfoData fcinfo;
+			char *fcinfo_data[SizeForFunctionCallInfoData(0)];
+		} fcinfodata;
+		FunctionCallInfo fcinfo = &fcinfodata.fcinfo;
 		TriggerData trigdata;
 
 		/*
@@ -8606,7 +8610,7 @@ validateForeignKeyConstraint(char *conname,
 		 *
 		 * No parameters are passed, but we do set a context
 		 */
-		MemSet(&fcinfo, 0, sizeof(fcinfo));
+		MemSet(&fcinfodata, 0, sizeof(fcinfodata));
 
 		/*
 		 * We assume RI_FKey_check_ins won't look at flinfo...
@@ -8620,9 +8624,9 @@ validateForeignKeyConstraint(char *conname,
 		trigdata.tg_trigtuplebuf = scan->rs_cbuf;
 		trigdata.tg_newtuplebuf = InvalidBuffer;
 
-		fcinfo.context = (Node *) &trigdata;
+		fcinfo->context = (Node *) &trigdata;
 
-		RI_FKey_check_ins(&fcinfo);
+		RI_FKey_check_ins(fcinfo);
 	}
 
 	heap_endscan(scan);

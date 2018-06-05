@@ -2117,15 +2117,16 @@ llvm_compile_expr(ExprState *state)
 			case EEOP_AGG_STRICT_INPUT_CHECK:
 				{
 					int			nargs = op->d.agg_strict_input_check.nargs;
-					bool	   *nulls = op->d.agg_strict_input_check.nulls;
+					NullableDatum *args = op->d.agg_strict_input_check.args;
 					int			jumpnull;
 					int			argno;
 
-					LLVMValueRef v_nullp;
+					LLVMValueRef v_argp;
 					LLVMBasicBlockRef *b_checknulls;
 
 					jumpnull = op->d.agg_strict_input_check.jumpnull;
-					v_nullp = l_ptr_const(nulls, l_ptr(TypeStorageBool));
+					/* FIXME: This isn't correct, it's a NullableDatum now */
+					v_argp = l_ptr_const(args, l_ptr(TypeStorageBool));
 
 					/* create blocks for checking args */
 					b_checknulls = palloc(sizeof(LLVMBasicBlockRef *) * nargs);
@@ -2153,7 +2154,8 @@ llvm_compile_expr(ExprState *state)
 						else
 							b_argnotnull = b_checknulls[argno + 1];
 
-						v_argisnull = l_load_gep1(b, v_nullp, v_argno, "");
+						/* FIXME: This isn't correct */
+						v_argisnull = l_load_gep1(b, v_argp, v_argno, "");
 
 						LLVMBuildCondBr(b,
 										LLVMBuildICmp(b,
@@ -2352,7 +2354,7 @@ llvm_compile_expr(ExprState *state)
 					aggstate = op->d.agg_trans.aggstate;
 					pertrans = op->d.agg_trans.pertrans;
 
-					fcinfo = &pertrans->transfn_fcinfo;
+					fcinfo = pertrans->transfn_fcinfo;
 
 					v_aggstatep = l_ptr_const(aggstate,
 											  l_ptr(StructAggState));
@@ -2622,12 +2624,8 @@ BuildV1Call(LLVMJitContext *context, LLVMBuilderRef b,
 		LLVMValueRef v_lifetime = create_LifetimeEnd(mod);
 		LLVMValueRef params[2];
 
-		params[0] = l_int64_const(sizeof(fcinfo->arg));
-		params[1] = l_ptr_const(fcinfo->arg, l_ptr(LLVMInt8Type()));
-		LLVMBuildCall(b, v_lifetime, params, lengthof(params), "");
-
-		params[0] = l_int64_const(sizeof(fcinfo->argnull));
-		params[1] = l_ptr_const(fcinfo->argnull, l_ptr(LLVMInt8Type()));
+		params[0] = l_int64_const(sizeof(NullableDatum) * fcinfo->nargs);
+		params[1] = l_ptr_const(fcinfo->args, l_ptr(LLVMInt8Type()));
 		LLVMBuildCall(b, v_lifetime, params, lengthof(params), "");
 
 		params[0] = l_int64_const(sizeof(fcinfo->isnull));

@@ -3590,7 +3590,10 @@ array_eq(PG_FUNCTION_ARGS)
 	array_iter	it1;
 	array_iter	it2;
 	int			i;
-	FunctionCallInfoData locfcinfo;
+	union {
+		FunctionCallInfoData fcinfo;
+		char *fcinfo_data[SizeForFunctionCallInfoData(2)];
+	} locfcinfo;
 
 	if (element_type != AARR_ELEMTYPE(array2))
 		ereport(ERROR,
@@ -3630,7 +3633,7 @@ array_eq(PG_FUNCTION_ARGS)
 		/*
 		 * apply the operator to each pair of array elements.
 		 */
-		InitFunctionCallInfoData(locfcinfo, &typentry->eq_opr_finfo, 2,
+		InitFunctionCallInfoData(locfcinfo.fcinfo, &typentry->eq_opr_finfo, 2,
 								 collation, NULL, NULL);
 
 		/* Loop over source data */
@@ -3666,12 +3669,12 @@ array_eq(PG_FUNCTION_ARGS)
 			/*
 			 * Apply the operator to the element pair
 			 */
-			locfcinfo.arg[0] = elt1;
-			locfcinfo.arg[1] = elt2;
-			locfcinfo.argnull[0] = false;
-			locfcinfo.argnull[1] = false;
-			locfcinfo.isnull = false;
-			oprresult = DatumGetBool(FunctionCallInvoke(&locfcinfo));
+			locfcinfo.fcinfo.args[0].datum = elt1;
+			locfcinfo.fcinfo.args[0].isnull = false;
+			locfcinfo.fcinfo.args[1].datum = elt2;
+			locfcinfo.fcinfo.args[1].isnull = false;
+			locfcinfo.fcinfo.isnull = false;
+			oprresult = DatumGetBool(FunctionCallInvoke(&locfcinfo.fcinfo));
 			if (!oprresult)
 			{
 				result = false;
@@ -3761,7 +3764,11 @@ array_cmp(FunctionCallInfo fcinfo)
 	array_iter	it1;
 	array_iter	it2;
 	int			i;
-	FunctionCallInfoData locfcinfo;
+		union {
+		FunctionCallInfoData fcinfo;
+		char *fcinfo_data[SizeForFunctionCallInfoData(2)];
+	} locfcinfo;
+
 
 	if (element_type != AARR_ELEMTYPE(array2))
 		ereport(ERROR,
@@ -3794,7 +3801,7 @@ array_cmp(FunctionCallInfo fcinfo)
 	/*
 	 * apply the operator to each pair of array elements.
 	 */
-	InitFunctionCallInfoData(locfcinfo, &typentry->cmp_proc_finfo, 2,
+	InitFunctionCallInfoData(locfcinfo.fcinfo, &typentry->cmp_proc_finfo, 2,
 							 collation, NULL, NULL);
 
 	/* Loop over source data */
@@ -3833,12 +3840,12 @@ array_cmp(FunctionCallInfo fcinfo)
 		}
 
 		/* Compare the pair of elements */
-		locfcinfo.arg[0] = elt1;
-		locfcinfo.arg[1] = elt2;
-		locfcinfo.argnull[0] = false;
-		locfcinfo.argnull[1] = false;
-		locfcinfo.isnull = false;
-		cmpresult = DatumGetInt32(FunctionCallInvoke(&locfcinfo));
+		locfcinfo.fcinfo.args[0].datum = elt1;
+		locfcinfo.fcinfo.args[0].isnull = false;
+		locfcinfo.fcinfo.args[1].datum = elt2;
+		locfcinfo.fcinfo.args[1].isnull = false;
+		locfcinfo.fcinfo.isnull = false;
+		cmpresult = DatumGetInt32(FunctionCallInvoke(&locfcinfo.fcinfo));
 
 		if (cmpresult == 0)
 			continue;			/* equal */
@@ -3925,7 +3932,11 @@ hash_array(PG_FUNCTION_ARGS)
 	char		typalign;
 	int			i;
 	array_iter	iter;
-	FunctionCallInfoData locfcinfo;
+		union {
+		FunctionCallInfoData fcinfo;
+		char *fcinfo_data[SizeForFunctionCallInfoData(1)];
+	} locfcinfo;
+
 
 	/*
 	 * We arrange to look up the hash function only once per series of calls,
@@ -3953,7 +3964,7 @@ hash_array(PG_FUNCTION_ARGS)
 	/*
 	 * apply the hash function to each array element.
 	 */
-	InitFunctionCallInfoData(locfcinfo, &typentry->hash_proc_finfo, 1,
+	InitFunctionCallInfoData(locfcinfo.fcinfo, &typentry->hash_proc_finfo, 1,
 							 InvalidOid, NULL, NULL);
 
 	/* Loop over source data */
@@ -3977,10 +3988,10 @@ hash_array(PG_FUNCTION_ARGS)
 		else
 		{
 			/* Apply the hash function */
-			locfcinfo.arg[0] = elt;
-			locfcinfo.argnull[0] = false;
-			locfcinfo.isnull = false;
-			elthash = DatumGetUInt32(FunctionCallInvoke(&locfcinfo));
+			locfcinfo.fcinfo.args[0].datum = elt;
+			locfcinfo.fcinfo.args[0].isnull = false;
+			locfcinfo.fcinfo.isnull = false;
+			elthash = DatumGetUInt32(FunctionCallInvoke(&locfcinfo.fcinfo));
 		}
 
 		/*
@@ -4023,7 +4034,11 @@ hash_array_extended(PG_FUNCTION_ARGS)
 	char		typalign;
 	int			i;
 	array_iter	iter;
-	FunctionCallInfoData locfcinfo;
+		union {
+		FunctionCallInfoData fcinfo;
+		char *fcinfo_data[SizeForFunctionCallInfoData(2)];
+	} locfcinfo;
+
 
 	typentry = (TypeCacheEntry *) fcinfo->flinfo->fn_extra;
 	if (typentry == NULL ||
@@ -4042,7 +4057,7 @@ hash_array_extended(PG_FUNCTION_ARGS)
 	typbyval = typentry->typbyval;
 	typalign = typentry->typalign;
 
-	InitFunctionCallInfoData(locfcinfo, &typentry->hash_extended_proc_finfo, 2,
+	InitFunctionCallInfoData(locfcinfo.fcinfo, &typentry->hash_extended_proc_finfo, 2,
 							 InvalidOid, NULL, NULL);
 
 	/* Loop over source data */
@@ -4065,12 +4080,11 @@ hash_array_extended(PG_FUNCTION_ARGS)
 		else
 		{
 			/* Apply the hash function */
-			locfcinfo.arg[0] = elt;
-			locfcinfo.arg[1] = Int64GetDatum(seed);
-			locfcinfo.argnull[0] = false;
-			locfcinfo.argnull[1] = false;
-			locfcinfo.isnull = false;
-			elthash = DatumGetUInt64(FunctionCallInvoke(&locfcinfo));
+			locfcinfo.fcinfo.args[0].datum = elt;
+			locfcinfo.fcinfo.args[0].isnull = false;
+			locfcinfo.fcinfo.args[1].datum = Int64GetDatum(seed);
+			locfcinfo.fcinfo.args[1].isnull = false;
+			elthash = DatumGetUInt64(FunctionCallInvoke(&locfcinfo.fcinfo));
 		}
 
 		result = (result << 5) - result + elthash;
@@ -4113,7 +4127,11 @@ array_contain_compare(AnyArrayType *array1, AnyArrayType *array2, Oid collation,
 	int			i;
 	int			j;
 	array_iter	it1;
-	FunctionCallInfoData locfcinfo;
+		union {
+		FunctionCallInfoData fcinfo;
+		char *fcinfo_data[SizeForFunctionCallInfoData(2)];
+	} locfcinfo;
+
 
 	if (element_type != AARR_ELEMTYPE(array2))
 		ereport(ERROR,
@@ -4164,7 +4182,7 @@ array_contain_compare(AnyArrayType *array1, AnyArrayType *array2, Oid collation,
 	/*
 	 * Apply the comparison operator to each pair of array elements.
 	 */
-	InitFunctionCallInfoData(locfcinfo, &typentry->eq_opr_finfo, 2,
+	InitFunctionCallInfoData(locfcinfo.fcinfo, &typentry->eq_opr_finfo, 2,
 							 collation, NULL, NULL);
 
 	/* Loop over source data */
@@ -4206,12 +4224,12 @@ array_contain_compare(AnyArrayType *array1, AnyArrayType *array2, Oid collation,
 			/*
 			 * Apply the operator to the element pair
 			 */
-			locfcinfo.arg[0] = elt1;
-			locfcinfo.arg[1] = elt2;
-			locfcinfo.argnull[0] = false;
-			locfcinfo.argnull[1] = false;
-			locfcinfo.isnull = false;
-			oprresult = DatumGetBool(FunctionCallInvoke(&locfcinfo));
+			locfcinfo.fcinfo.args[0].datum = elt1;
+			locfcinfo.fcinfo.args[0].isnull = false;
+			locfcinfo.fcinfo.args[1].datum = elt2;
+			locfcinfo.fcinfo.args[1].isnull = false;
+			locfcinfo.fcinfo.isnull = false;
+			oprresult = DatumGetBool(FunctionCallInvoke(&locfcinfo.fcinfo));
 			if (oprresult)
 				break;
 		}
@@ -6062,7 +6080,11 @@ array_replace_internal(ArrayType *array,
 	int			bitmask;
 	bool		changed = false;
 	TypeCacheEntry *typentry;
-	FunctionCallInfoData locfcinfo;
+		union {
+		FunctionCallInfoData fcinfo;
+		char *fcinfo_data[SizeForFunctionCallInfoData(2)];
+	} locfcinfo;
+
 
 	element_type = ARR_ELEMTYPE(array);
 	ndim = ARR_NDIM(array);
@@ -6117,7 +6139,7 @@ array_replace_internal(ArrayType *array,
 	}
 
 	/* Prepare to apply the comparison operator */
-	InitFunctionCallInfoData(locfcinfo, &typentry->eq_opr_finfo, 2,
+	InitFunctionCallInfoData(locfcinfo.fcinfo, &typentry->eq_opr_finfo, 2,
 							 collation, NULL, NULL);
 
 	/* Allocate temporary arrays for new values */
@@ -6175,12 +6197,12 @@ array_replace_internal(ArrayType *array,
 				/*
 				 * Apply the operator to the element pair
 				 */
-				locfcinfo.arg[0] = elt;
-				locfcinfo.arg[1] = search;
-				locfcinfo.argnull[0] = false;
-				locfcinfo.argnull[1] = false;
-				locfcinfo.isnull = false;
-				oprresult = DatumGetBool(FunctionCallInvoke(&locfcinfo));
+				locfcinfo.fcinfo.args[0].datum = elt;
+				locfcinfo.fcinfo.args[0].isnull = false;
+				locfcinfo.fcinfo.args[1].datum = search;
+				locfcinfo.fcinfo.args[1].isnull = false;
+				locfcinfo.fcinfo.isnull = false;
+				oprresult = DatumGetBool(FunctionCallInvoke(&locfcinfo.fcinfo));
 				if (!oprresult)
 				{
 					/* no match, keep element */
@@ -6460,7 +6482,11 @@ width_bucket_array_fixed(Datum operand,
 	char	   *thresholds_data;
 	int			typlen = typentry->typlen;
 	bool		typbyval = typentry->typbyval;
-	FunctionCallInfoData locfcinfo;
+		union {
+		FunctionCallInfoData fcinfo;
+		char *fcinfo_data[SizeForFunctionCallInfoData(2)];
+	} locfcinfo;
+
 	int			left;
 	int			right;
 
@@ -6470,7 +6496,7 @@ width_bucket_array_fixed(Datum operand,
 	 */
 	thresholds_data = (char *) ARR_DATA_PTR(thresholds);
 
-	InitFunctionCallInfoData(locfcinfo, &typentry->cmp_proc_finfo, 2,
+	InitFunctionCallInfoData(locfcinfo.fcinfo, &typentry->cmp_proc_finfo, 2,
 							 collation, NULL, NULL);
 
 	/* Find the bucket */
@@ -6484,13 +6510,13 @@ width_bucket_array_fixed(Datum operand,
 
 		ptr = thresholds_data + mid * typlen;
 
-		locfcinfo.arg[0] = operand;
-		locfcinfo.arg[1] = fetch_att(ptr, typbyval, typlen);
-		locfcinfo.argnull[0] = false;
-		locfcinfo.argnull[1] = false;
-		locfcinfo.isnull = false;
+		locfcinfo.fcinfo.args[0].datum = operand;
+		locfcinfo.fcinfo.args[0].isnull = false;
+		locfcinfo.fcinfo.args[1].datum = fetch_att(ptr, typbyval, typlen);
+		locfcinfo.fcinfo.args[1].isnull = false;
+		locfcinfo.fcinfo.isnull = false;
 
-		cmpresult = DatumGetInt32(FunctionCallInvoke(&locfcinfo));
+		cmpresult = DatumGetInt32(FunctionCallInvoke(&locfcinfo.fcinfo));
 
 		if (cmpresult < 0)
 			right = mid;
@@ -6514,13 +6540,17 @@ width_bucket_array_variable(Datum operand,
 	int			typlen = typentry->typlen;
 	bool		typbyval = typentry->typbyval;
 	char		typalign = typentry->typalign;
-	FunctionCallInfoData locfcinfo;
+		union {
+		FunctionCallInfoData fcinfo;
+		char *fcinfo_data[SizeForFunctionCallInfoData(2)];
+	} locfcinfo;
+
 	int			left;
 	int			right;
 
 	thresholds_data = (char *) ARR_DATA_PTR(thresholds);
 
-	InitFunctionCallInfoData(locfcinfo, &typentry->cmp_proc_finfo, 2,
+	InitFunctionCallInfoData(locfcinfo.fcinfo, &typentry->cmp_proc_finfo, 2,
 							 collation, NULL, NULL);
 
 	/* Find the bucket */
@@ -6541,13 +6571,12 @@ width_bucket_array_variable(Datum operand,
 			ptr = (char *) att_align_nominal(ptr, typalign);
 		}
 
-		locfcinfo.arg[0] = operand;
-		locfcinfo.arg[1] = fetch_att(ptr, typbyval, typlen);
-		locfcinfo.argnull[0] = false;
-		locfcinfo.argnull[1] = false;
-		locfcinfo.isnull = false;
+		locfcinfo.fcinfo.args[0].datum = operand;
+		locfcinfo.fcinfo.args[0].isnull = false;
+		locfcinfo.fcinfo.args[1].datum = fetch_att(ptr, typbyval, typlen);
+		locfcinfo.fcinfo.args[1].isnull = false;
 
-		cmpresult = DatumGetInt32(FunctionCallInvoke(&locfcinfo));
+		cmpresult = DatumGetInt32(FunctionCallInvoke(&locfcinfo.fcinfo));
 
 		if (cmpresult < 0)
 			right = mid;

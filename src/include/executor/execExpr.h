@@ -224,7 +224,8 @@ typedef enum ExprEvalOp
 	/* aggregation related nodes */
 	EEOP_AGG_STRICT_DESERIALIZE,
 	EEOP_AGG_DESERIALIZE,
-	EEOP_AGG_STRICT_INPUT_CHECK,
+	EEOP_AGG_STRICT_INPUT_CHECK_ARGS,
+	EEOP_AGG_STRICT_INPUT_CHECK_NULLS,
 	EEOP_AGG_INIT_TRANS,
 	EEOP_AGG_STRICT_TRANS_CHECK,
 	EEOP_AGG_PLAIN_TRANS_BYVAL,
@@ -600,7 +601,8 @@ typedef struct ExprEvalStep
 		/* for EEOP_AGG_STRICT_INPUT_CHECK */
 		struct
 		{
-			bool	   *nulls;
+			NullableDatum *args;
+			bool *nulls;
 			int			nargs;
 			int			jumpnull;
 		}			agg_strict_input_check;

@@ -84,10 +84,13 @@ typedef struct FunctionCallInfoData
 	bool		isnull;			/* function must set true if result is NULL */
 	short		nargs;			/* # arguments actually passed */
 #define FIELDNO_FUNCTIONCALLINFODATA_ARG 6
-	Datum		arg[FUNC_MAX_ARGS]; /* Arguments passed to function */
-#define FIELDNO_FUNCTIONCALLINFODATA_ARGNULL 7
-	bool		argnull[FUNC_MAX_ARGS]; /* T if arg[i] is actually NULL */
+#define FIELDNO_FUNCTIONCALLINFODATA_ARGNULL 6
+
+	NullableDatum args[FLEXIBLE_ARRAY_MEMBER];
+
 } FunctionCallInfoData;
+
+#define SizeForFunctionCallInfoData(nargs) (offsetof(FunctionCallInfoData, args) + sizeof(NullableDatum) * (nargs))
 
 /*
  * This routine fills a FmgrInfo struct, given the OID
@@ -141,7 +144,6 @@ extern void fmgr_symbol(Oid functionId, char **mod, char **fn);
  */
 #define FunctionCallInvoke(fcinfo)	((* (fcinfo)->flinfo->fn_addr) (fcinfo))
 
-
 /*-------------------------------------------------------------------------
  *		Support macros to ease writing fmgr-compatible functions
  *
@@ -176,7 +178,7 @@ extern void fmgr_symbol(Oid functionId, char **mod, char **fn);
  * If function is not marked "proisstrict" in pg_proc, it must check for
  * null arguments using this macro.  Do not try to GETARG a null argument!
  */
-#define PG_ARGISNULL(n)  (fcinfo->argnull[n])
+#define PG_ARGISNULL(n)  (fcinfo->args[n].isnull)
 
 /*
  * Support for fetching detoasted copies of toastable datatypes (all of
@@ -235,7 +237,7 @@ extern struct varlena *pg_detoast_datum_packed(struct varlena *datum);
 
 /* Macros for fetching arguments of standard types */
 
-#define PG_GETARG_DATUM(n)	 (fcinfo->arg[n])
+#define PG_GETARG_DATUM(n)	 (fcinfo->args[n].datum)
 #define PG_GETARG_INT32(n)	 DatumGetInt32(PG_GETARG_DATUM(n))
 #define PG_GETARG_UINT32(n)  DatumGetUInt32(PG_GETARG_DATUM(n))
 #define PG_GETARG_INT16(n)	 DatumGetInt16(PG_GETARG_DATUM(n))
@@ -514,6 +516,7 @@ extern Datum CallerFInfoFunctionCall2(PGFunction func, FmgrInfo *flinfo,
  * directly-computed parameter list.  Note that neither arguments nor result
  * are allowed to be NULL.
  */
+extern Datum FunctionCall0Coll(FmgrInfo *flinfo, Oid collation);
 extern Datum FunctionCall1Coll(FmgrInfo *flinfo, Oid collation,
 				  Datum arg1);
 extern Datum FunctionCall2Coll(FmgrInfo *flinfo, Oid collation,

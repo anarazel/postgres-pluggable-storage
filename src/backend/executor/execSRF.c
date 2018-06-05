@@ -109,7 +109,10 @@ ExecMakeTableFunctionResult(SetExprState *setexpr,
 	Oid			funcrettype;
 	bool		returnsTuple;
 	bool		returnsSet = false;
-	FunctionCallInfoData fcinfo;
+	union {
+		FunctionCallInfoData fcinfo;
+		char *fcinfo_data[SizeForFunctionCallInfoData(3)];
+	} fcinfo;
 	PgStat_FunctionCallUsage fcusage;
 	ReturnSetInfo rsinfo;
 	HeapTupleData tmptup;
@@ -157,9 +160,9 @@ ExecMakeTableFunctionResult(SetExprState *setexpr,
 		 * This path is similar to ExecMakeFunctionResultSet.
 		 */
 		returnsSet = setexpr->funcReturnsSet;
-		InitFunctionCallInfoData(fcinfo, &(setexpr->func),
+		InitFunctionCallInfoData(fcinfo.fcinfo, &(setexpr->func),
 								 list_length(setexpr->args),
-								 setexpr->fcinfo_data.fncollation,
+								 setexpr->fcinfo->fncollation,
 								 NULL, (Node *) &rsinfo);
 
 		/*
@@ -174,7 +177,7 @@ ExecMakeTableFunctionResult(SetExprState *setexpr,
 		 */
 		MemoryContextReset(argContext);
 		oldcontext = MemoryContextSwitchTo(argContext);
-		ExecEvalFuncArgs(&fcinfo, setexpr->args, econtext);
+		ExecEvalFuncArgs(&fcinfo.fcinfo, setexpr->args, econtext);
 		MemoryContextSwitchTo(oldcontext);
 
 		/*
@@ -186,9 +189,9 @@ ExecMakeTableFunctionResult(SetExprState *setexpr,
 		{
 			int			i;
 
-			for (i = 0; i < fcinfo.nargs; i++)
+			for (i = 0; i < fcinfo.fcinfo.nargs; i++)
 			{
-				if (fcinfo.argnull[i])
+				if (fcinfo.fcinfo.args[i].isnull)
 					goto no_function_result;
 			}
 		}
@@ -196,7 +199,7 @@ ExecMakeTableFunctionResult(SetExprState *setexpr,
 	else
 	{
 		/* Treat setexpr as a generic expression */
-		InitFunctionCallInfoData(fcinfo, NULL, 0, InvalidOid, NULL, NULL);
+		InitFunctionCallInfoData(fcinfo.fcinfo, NULL, 0, InvalidOid, NULL, NULL);
 	}
 
 	/*
@@ -224,11 +227,11 @@ ExecMakeTableFunctionResult(SetExprState *setexpr,
 		/* Call the function or expression one time */
 		if (!setexpr->elidedFuncState)
 		{
-			pgstat_init_function_usage(&fcinfo, &fcusage);
+			pgstat_init_function_usage(&fcinfo.fcinfo, &fcusage);
 
-			fcinfo.isnull = false;
+			fcinfo.fcinfo.isnull = false;
 			rsinfo.isDone = ExprSingleResult;
-			result = FunctionCallInvoke(&fcinfo);
+			result = FunctionCallInvoke(&fcinfo.fcinfo);
 
 			pgstat_end_function_usage(&fcusage,
 									  rsinfo.isDone != ExprMultipleResult);
@@ -236,7 +239,7 @@ ExecMakeTableFunctionResult(SetExprState *setexpr,
 		else
 		{
 			result =
-				ExecEvalExpr(setexpr->elidedFuncState, econtext, &fcinfo.isnull);
+				ExecEvalExpr(setexpr->elidedFuncState, econtext, &fcinfo.fcinfo.isnull);
 			rsinfo.isDone = ExprSingleResult;
 		}
 
@@ -277,7 +280,7 @@ ExecMakeTableFunctionResult(SetExprState *setexpr,
 			 */
 			if (returnsTuple)
 			{
-				if (!fcinfo.isnull)
+				if (!fcinfo.fcinfo.isnull)
 				{
 					HeapTupleHeader td = DatumGetHeapTupleHeader(result);
 
@@ -338,7 +341,7 @@ ExecMakeTableFunctionResult(SetExprState *setexpr,
 			else
 			{
 				/* Scalar-type case: just store the function result */
-				tuplestore_putvalues(tupstore, tupdesc, &result, &fcinfo.isnull);
+				tuplestore_putvalues(tupstore, tupdesc, &result, &fcinfo.fcinfo.isnull);
 			}
 
 			/*
@@ -547,7 +550,7 @@ restart:
 	 * rows from this SRF have been returned, otherwise ValuePerCall SRFs
 	 * would reference freed memory after the first returned row.
 	 */
-	fcinfo = &fcache->fcinfo_data;
+	fcinfo = fcache->fcinfo;
 	arguments = fcache->args;
 	if (!fcache->setArgsValid)
 	{
@@ -587,7 +590,7 @@ restart:
 	{
 		for (i = 0; i < fcinfo->nargs; i++)
 		{
-			if (fcinfo->argnull[i])
+			if (fcinfo->args[i].isnull)
 			{
 				callit = false;
 				break;
@@ -704,7 +707,8 @@ init_sexpr(Oid foid, Oid input_collation, Expr *node,
 	fmgr_info_set_expr((Node *) sexpr->expr, &(sexpr->func));
 
 	/* Initialize the function call parameter struct as well */
-	InitFunctionCallInfoData(sexpr->fcinfo_data, &(sexpr->func),
+	sexpr->fcinfo = (FunctionCallInfo) palloc(SizeForFunctionCallInfoData(list_length(sexpr->args)));
+	InitFunctionCallInfoData(*sexpr->fcinfo, &(sexpr->func),
 							 list_length(sexpr->args),
 							 input_collation, NULL, NULL);
 
@@ -820,9 +824,9 @@ ExecEvalFuncArgs(FunctionCallInfo fcinfo,
 	{
 		ExprState  *argstate = (ExprState *) lfirst(arg);
 
-		fcinfo->arg[i] = ExecEvalExpr(argstate,
-									  econtext,
-									  &fcinfo->argnull[i]);
+		fcinfo->args[i].datum = ExecEvalExpr(argstate,
+											 econtext,
+											 &fcinfo->args[i].isnull);
 		i++;
 	}
 

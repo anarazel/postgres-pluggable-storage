@@ -1050,7 +1050,11 @@ EventTriggerInvoke(List *fn_oid_list, EventTriggerData *trigdata)
 	{
 		Oid			fnoid = lfirst_oid(lc);
 		FmgrInfo	flinfo;
-		FunctionCallInfoData fcinfo;
+		union {
+			FunctionCallInfoData fcinfo;
+			char *fcinfo_data[SizeForFunctionCallInfoData(0)];
+		} fcinfodata;
+		FunctionCallInfo fcinfo = &fcinfodata.fcinfo;
 		PgStat_FunctionCallUsage fcusage;
 
 		elog(DEBUG1, "EventTriggerInvoke %u", fnoid);
@@ -1070,10 +1074,10 @@ EventTriggerInvoke(List *fn_oid_list, EventTriggerData *trigdata)
 		fmgr_info(fnoid, &flinfo);
 
 		/* Call the function, passing no arguments but setting a context. */
-		InitFunctionCallInfoData(fcinfo, &flinfo, 0,
+		InitFunctionCallInfoData(*fcinfo, &flinfo, 0,
 								 InvalidOid, (Node *) trigdata, NULL);
-		pgstat_init_function_usage(&fcinfo, &fcusage);
-		FunctionCallInvoke(&fcinfo);
+		pgstat_init_function_usage(fcinfo, &fcusage);
+		FunctionCallInvoke(fcinfo);
 		pgstat_end_function_usage(&fcusage, true);
 
 		/* Reclaim memory. */

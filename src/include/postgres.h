@@ -366,6 +366,13 @@ typedef struct
 
 typedef uintptr_t Datum;
 
+typedef struct NullableDatum
+{
+	Datum datum;
+	bool isnull;
+	/* FIXME: space for flags? */
+} NullableDatum;
+
 #define SIZEOF_DATUM SIZEOF_VOID_P
 
 /*

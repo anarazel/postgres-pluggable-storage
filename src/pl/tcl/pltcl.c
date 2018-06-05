@@ -601,7 +601,12 @@ call_pltcl_start_proc(Oid prolang, bool pltrusted)
 	Form_pg_proc procStruct;
 	AclResult	aclresult;
 	FmgrInfo	finfo;
-	FunctionCallInfoData fcinfo;
+	union {
+		FunctionCallInfoData fcinfo;
+		char *fcinfo_data[SizeForFunctionCallInfoData(3)];
+	} fcinfodata;
+	FunctionCallInfo fcinfo = &fcinfodata.fcinfo;
+
 	PgStat_FunctionCallUsage fcusage;
 
 	/* select appropriate GUC */
@@ -662,11 +667,11 @@ call_pltcl_start_proc(Oid prolang, bool pltrusted)
 	 */
 	InvokeFunctionExecuteHook(procOid);
 	fmgr_info(procOid, &finfo);
-	InitFunctionCallInfoData(fcinfo, &finfo,
+	InitFunctionCallInfoData(*fcinfo, &finfo,
 							 0,
 							 InvalidOid, NULL, NULL);
-	pgstat_init_function_usage(&fcinfo, &fcusage);
-	(void) FunctionCallInvoke(&fcinfo);
+	pgstat_init_function_usage(fcinfo, &fcusage);
+	(void) FunctionCallInvoke(fcinfo);
 	pgstat_end_function_usage(&fcusage, true);
 
 	/* Pop the error context stack */
@@ -873,7 +878,7 @@ pltcl_func_handler(PG_FUNCTION_ARGS, pltcl_call_state *call_state,
 				/**************************************************
 				 * For tuple values, add a list for 'array set ...'
 				 **************************************************/
-				if (fcinfo->argnull[i])
+				if (fcinfo->args[i].isnull)
 					Tcl_ListObjAppendElement(NULL, tcl_cmd, Tcl_NewObj());
 				else
 				{
@@ -884,7 +889,7 @@ pltcl_func_handler(PG_FUNCTION_ARGS, pltcl_call_state *call_state,
 					HeapTupleData tmptup;
 					Tcl_Obj    *list_tmp;
 
-					td = DatumGetHeapTupleHeader(fcinfo->arg[i]);
+					td = DatumGetHeapTupleHeader(fcinfo->args[i].datum);
 					/* Extract rowtype info and find a tupdesc */
 					tupType = HeapTupleHeaderGetTypeId(td);
 					tupTypmod = HeapTupleHeaderGetTypMod(td);
@@ -905,14 +910,14 @@ pltcl_func_handler(PG_FUNCTION_ARGS, pltcl_call_state *call_state,
 				 * Single values are added as string element
 				 * of their external representation
 				 **************************************************/
-				if (fcinfo->argnull[i])
+				if (fcinfo->args[i].isnull)
 					Tcl_ListObjAppendElement(NULL, tcl_cmd, Tcl_NewObj());
 				else
 				{
 					char	   *tmp;
 
 					tmp = OutputFunctionCall(&prodesc->arg_out_func[i],
-											 fcinfo->arg[i]);
+											 fcinfo->args[i].datum);
 					UTF_BEGIN;
 					Tcl_ListObjAppendElement(NULL, tcl_cmd,
 											 Tcl_NewStringObj(UTF_E2U(tmp), -1));

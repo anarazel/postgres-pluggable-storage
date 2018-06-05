@@ -202,7 +202,10 @@ Datum
 int2vectorrecv(PG_FUNCTION_ARGS)
 {
 	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
-	FunctionCallInfoData locfcinfo;
+	union {
+		FunctionCallInfoData fcinfo;
+		char *fcinfo_data[SizeForFunctionCallInfoData(3)];
+	} locfcinfo;
 	int2vector *result;
 
 	/*
@@ -211,19 +214,19 @@ int2vectorrecv(PG_FUNCTION_ARGS)
 	 * fcinfo->flinfo->fn_extra.  So we need to pass it our own flinfo
 	 * parameter.
 	 */
-	InitFunctionCallInfoData(locfcinfo, fcinfo->flinfo, 3,
+	InitFunctionCallInfoData(locfcinfo.fcinfo, fcinfo->flinfo, 3,
 							 InvalidOid, NULL, NULL);
 
-	locfcinfo.arg[0] = PointerGetDatum(buf);
-	locfcinfo.arg[1] = ObjectIdGetDatum(INT2OID);
-	locfcinfo.arg[2] = Int32GetDatum(-1);
-	locfcinfo.argnull[0] = false;
-	locfcinfo.argnull[1] = false;
-	locfcinfo.argnull[2] = false;
+	locfcinfo.fcinfo.args[0].datum = PointerGetDatum(buf);
+	locfcinfo.fcinfo.args[0].isnull = false;
+	locfcinfo.fcinfo.args[1].datum = ObjectIdGetDatum(INT2OID);
+	locfcinfo.fcinfo.args[1].isnull = false;
+	locfcinfo.fcinfo.args[2].datum = Int32GetDatum(-1);
+	locfcinfo.fcinfo.args[2].isnull = false;
 
-	result = (int2vector *) DatumGetPointer(array_recv(&locfcinfo));
+	result = (int2vector *) DatumGetPointer(array_recv(&locfcinfo.fcinfo));
 
-	Assert(!locfcinfo.isnull);
+	Assert(!locfcinfo.fcinfo.isnull);
 
 	/* sanity checks: int2vector must be 1-D, 0-based, no nulls */
 	if (ARR_NDIM(result) != 1 ||
