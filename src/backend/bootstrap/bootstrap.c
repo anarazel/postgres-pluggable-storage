@@ -616,7 +616,7 @@ boot_openrel(char *relname)
 		app = Typ;
 		while ((tup = heap_getnext(scan, ForwardScanDirection)) != NULL)
 		{
-			(*app)->am_oid = HeapTupleGetOid(tup);
+			(*app)->am_oid = ((Form_pg_type) GETSTRUCT(tup))->oid;
 			memcpy((char *) &(*app)->am_typ,
 				   (char *) GETSTRUCT(tup),
 				   sizeof((*app)->am_typ));
@@ -807,12 +807,8 @@ InsertOneTuple(Oid objectid)
 
 	elog(DEBUG4, "inserting row oid %u, %d columns", objectid, numattr);
 
-	tupDesc = CreateTupleDesc(numattr,
-							  RelationGetForm(boot_reldesc)->relhasoids,
-							  attrtypes);
+	tupDesc = CreateTupleDesc(numattr, attrtypes);
 	tuple = heap_form_tuple(tupDesc, values, Nulls);
-	if (objectid != (Oid) 0)
-		HeapTupleSetOid(tuple, objectid);
 	pfree(tupDesc);				/* just free's tupDesc, not the attrtypes */
 
 	simple_heap_insert(boot_reldesc, tuple);
@@ -946,7 +942,7 @@ gettype(char *type)
 		app = Typ;
 		while ((tup = heap_getnext(scan, ForwardScanDirection)) != NULL)
 		{
-			(*app)->am_oid = HeapTupleGetOid(tup);
+			(*app)->am_oid = ((Form_pg_type) GETSTRUCT(tup))->oid;
 			memmove((char *) &(*app++)->am_typ,
 					(char *) GETSTRUCT(tup),
 					sizeof((*app)->am_typ));
