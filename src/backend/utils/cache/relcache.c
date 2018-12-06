@@ -3417,6 +3417,21 @@ RelationSetNewRelfilenode(Relation relation, char persistence,
 	HeapTuple	tuple;
 	Form_pg_class classform;
 
+
+#if 0
+	/*
+	 * If the relation contains any specific SetNewFilenode
+	 * function, use that instead of the regular default heap method.
+	 */
+	if (relation->rd_tableamroutine &&
+			relation->rd_tableamroutine->SetNewFileNode)
+	{
+		relation->rd_tableamroutine->SetNewFileNode(relation, persistence,
+													freezeXid, minmulti);
+		return;
+	}
+#endif
+
 	/* Indexes, sequences must have Invalid frozenxid; other rels must not */
 	Assert((relation->rd_rel->relkind == RELKIND_INDEX ||
 			relation->rd_rel->relkind == RELKIND_SEQUENCE) ?

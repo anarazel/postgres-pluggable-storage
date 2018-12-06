@@ -946,6 +946,20 @@ estimate_rel_size(Relation rel, int32 *attr_widths,
 	BlockNumber relallvisible;
 	double		density;
 
+#if 0
+	/*
+	 * If the relation contains any specific EstimateRelSize
+	 * function, use that instead of the regular default heap method.
+	 */
+	if (rel->rd_tableamroutine &&
+			rel->rd_tableamroutine->EstimateRelSize)
+	{
+		rel->rd_tableamroutine->EstimateRelSize(rel, attr_widths, pages,
+												tuples, allvisfrac);
+		return;
+	}
+#endif
+
 	switch (rel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:

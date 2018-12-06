@@ -114,7 +114,13 @@ typedef void (*RelationCopyForCluster_function)(Relation NewHeap, Relation OldHe
 									   TransactionId OldestXmin, TransactionId FreezeXid, MultiXactId MultiXactCutoff,
 									   double *num_tuples, double *tups_vacuumed, double *tups_recently_dead);
 
+typedef void (*RelationCreateInitFork_function)(Relation rel);
+typedef void (*RelationSetNewFileNode_function)(Relation relation, char persistence,
+										TransactionId freezeXid, MultiXactId minmulti);
 typedef void (*RelationSync_function) (Relation relation);
+typedef void (*RelationEstimateSize_function)(Relation rel, int32 *attr_widths,
+				  BlockNumber *pages, double *tuples, double *allvisfrac);
+
 
 typedef const TupleTableSlotOps* (*SlotCallbacks_function) (Relation relation);
 
@@ -206,7 +212,11 @@ typedef struct TableAmRoutine
 	RelationScanAnalyzeNextBlock_function scan_analyze_next_block;
 	RelationScanAnalyzeNextTuple_function scan_analyze_next_tuple;
 	RelationCopyForCluster_function relation_copy_for_cluster;
+
+	RelationCreateInitFork_function relation_create_init_fork;
+	RelationSetNewFileNode_function	relation_set_new_filenode;
 	RelationSync_function relation_sync;
+	RelationEstimateSize_function relation_estimate_size;
 
 	/* Operations on relation scans */
 	ScanBegin_function scan_begin;
@@ -646,6 +656,20 @@ table_copy_for_cluster(Relation OldHeap, Relation NewHeap, Relation OldIndex,
 													  num_tuples, tups_vacuumed, tups_recently_dead);
 }
 
+static inline void
+table_create_init_fork(Relation rel)
+{
+	rel->rd_tableamroutine->relation_create_init_fork(rel);
+}
+
+static inline void
+table_set_new_filenode(Relation rel, char persistence,
+					   TransactionId freezeXid, MultiXactId minmulti)
+{
+	rel->rd_tableamroutine->relation_set_new_filenode(rel, persistence,
+													  freezeXid, minmulti);
+}
+
 /*
  *	table_sync		- sync a heap, for use when no WAL has been written
  */
@@ -653,6 +677,14 @@ static inline void
 table_sync(Relation rel)
 {
 	rel->rd_tableamroutine->relation_sync(rel);
+}
+
+static inline void
+table_estimate_size(Relation rel, int32 *attr_widths,
+					BlockNumber *pages, double *tuples, double *allvisfrac)
+{
+	rel->rd_tableamroutine->relation_estimate_size(rel, attr_widths,
+												   pages, tuples, allvisfrac);
 }
 
 static inline double

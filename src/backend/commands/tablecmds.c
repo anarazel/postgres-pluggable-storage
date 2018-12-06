@@ -1624,7 +1624,7 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 			RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence,
 									  RecentXmin, minmulti);
 			if (rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
-				heap_create_init_fork(rel);
+				table_create_init_fork(rel);
 
 			heap_relid = RelationGetRelid(rel);
 
@@ -1641,7 +1641,7 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 										  toastrel->rd_rel->relpersistence,
 										  RecentXmin, minmulti);
 				if (toastrel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
-					heap_create_init_fork(toastrel);
+					table_create_init_fork(toastrel);
 				heap_close(toastrel, NoLock);
 			}
 

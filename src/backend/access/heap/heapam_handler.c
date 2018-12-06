@@ -30,6 +30,7 @@
 #include "catalog/catalog.h"
 #include "catalog/index.h"
 #include "catalog/pg_am_d.h"
+#include "catalog/storage_xlog.h"
 #include "executor/executor.h"
 #include "pgstat.h"
 #include "storage/lmgr.h"
@@ -2062,6 +2063,28 @@ heap_copy_for_cluster(Relation OldHeap, Relation NewHeap, Relation OldIndex,
 	pfree(isnull);
 }
 
+/*
+ * Set up an init fork for an unlogged table so that it can be correctly
+ * reinitialized on restart.  An immediate sync is required even if the
+ * page has been logged, because the write did not go through
+ * shared_buffers and therefore a concurrent checkpoint may have moved
+ * the redo pointer past our xlog record.  Recovery may as well remove it
+ * while replaying, for example, XLOG_DBASE_CREATE or XLOG_TBLSPC_CREATE
+ * record. Therefore, logging is necessary even if wal_level=minimal.
+ */
+static void
+heap_create_init_fork(Relation rel)
+{
+	Assert(rel->rd_rel->relkind == RELKIND_RELATION ||
+		   rel->rd_rel->relkind == RELKIND_MATVIEW ||
+		   rel->rd_rel->relkind == RELKIND_TOASTVALUE);
+	RelationOpenSmgr(rel);
+	smgrcreate(rel->rd_smgr, INIT_FORKNUM, false);
+	log_smgrcreate(&rel->rd_smgr->smgr_rnode.node, INIT_FORKNUM);
+	smgrimmedsync(rel->rd_smgr, INIT_FORKNUM);
+}
+
+
 static const TableAmRoutine heapam_methods = {
 	.type = T_TableAmRoutine,
 
@@ -2098,6 +2121,7 @@ static const TableAmRoutine heapam_methods = {
 	.scan_analyze_next_block = heapam_scan_analyze_next_block,
 	.scan_analyze_next_tuple = heapam_scan_analyze_next_tuple,
 	.relation_copy_for_cluster = heap_copy_for_cluster,
+	.relation_create_init_fork = heap_create_init_fork,
 	.relation_sync = heap_sync,
 
 	.begin_index_fetch = heapam_begin_index_fetch,

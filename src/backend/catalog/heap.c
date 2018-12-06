@@ -32,6 +32,7 @@
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/sysattr.h"
+#include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -1396,7 +1397,7 @@ heap_create_with_catalog(const char *relname,
 	 */
 	if (relpersistence == RELPERSISTENCE_UNLOGGED &&
 		relkind != RELKIND_PARTITIONED_TABLE)
-		heap_create_init_fork(new_rel_desc);
+		table_create_init_fork(new_rel_desc);
 
 	/*
 	 * ok, the relation has been cataloged, so close our relations and return
@@ -1406,27 +1407,6 @@ heap_create_with_catalog(const char *relname,
 	heap_close(pg_class_desc, RowExclusiveLock);
 
 	return relid;
-}
-
-/*
- * Set up an init fork for an unlogged table so that it can be correctly
- * reinitialized on restart.  An immediate sync is required even if the
- * page has been logged, because the write did not go through
- * shared_buffers and therefore a concurrent checkpoint may have moved
- * the redo pointer past our xlog record.  Recovery may as well remove it
- * while replaying, for example, XLOG_DBASE_CREATE or XLOG_TBLSPC_CREATE
- * record. Therefore, logging is necessary even if wal_level=minimal.
- */
-void
-heap_create_init_fork(Relation rel)
-{
-	Assert(rel->rd_rel->relkind == RELKIND_RELATION ||
-		   rel->rd_rel->relkind == RELKIND_MATVIEW ||
-		   rel->rd_rel->relkind == RELKIND_TOASTVALUE);
-	RelationOpenSmgr(rel);
-	smgrcreate(rel->rd_smgr, INIT_FORKNUM, false);
-	log_smgrcreate(&rel->rd_smgr->smgr_rnode.node, INIT_FORKNUM);
-	smgrimmedsync(rel->rd_smgr, INIT_FORKNUM);
 }
 
 /*
