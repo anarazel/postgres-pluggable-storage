@@ -2395,7 +2395,12 @@ CopyFrom(CopyState cstate)
 		 cstate->rel->rd_newRelfilenodeSubid != InvalidSubTransactionId))
 	{
 		hi_options |= HEAP_INSERT_SKIP_FSM;
-		if (!XLogIsNeeded())
+		/*
+		 * In zheap, we don't support the optimization for HEAP_INSERT_SKIP_WAL.
+		 * See zheap_prepare_insert for details.
+		 * PBORKED / ZBORKED: abstract
+		 */
+		if (!RelationStorageIsZHeap(cstate->rel) && !XLogIsNeeded())
 			hi_options |= HEAP_INSERT_SKIP_WAL;
 	}
 

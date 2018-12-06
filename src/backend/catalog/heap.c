@@ -31,11 +31,13 @@
 
 #include "access/htup_details.h"
 #include "access/multixact.h"
+#include "access/reloptions.h"
 #include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "access/zheap.h"
 #include "catalog/binary_upgrade.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
@@ -918,10 +920,14 @@ AddNewRelationTuple(Relation pg_class_desc,
 			break;
 	}
 
-	/* Initialize relfrozenxid and relminmxid */
-	if (relkind == RELKIND_RELATION ||
-		relkind == RELKIND_MATVIEW ||
-		relkind == RELKIND_TOASTVALUE)
+	/*
+	 * Initialize relfrozenxid and relminmxid.  The relations stored in zheap
+	 * doesn't need to perform freeze.
+	 */
+	if ((relkind == RELKIND_RELATION ||
+		 relkind == RELKIND_MATVIEW ||
+		 relkind == RELKIND_TOASTVALUE) &&
+		new_rel_desc->rd_rel->relam != ZHEAP_TABLE_AM_OID)
 	{
 		/*
 		 * Initialize to the minimum XID that could put tuples in the table.
@@ -1390,6 +1396,15 @@ heap_create_with_catalog(const char *relname,
 	 */
 	if (oncommit != ONCOMMIT_NOOP)
 		register_on_commit_action(relid, oncommit);
+
+	/*
+	 * Initialize the metapage for zheap, except for partitioned relations as
+	 * they do not have any storage
+	 * PBORKED: abstract
+	 */
+	if (accessmtd == ZHEAP_TABLE_AM_OID &&
+		relkind != 'p')
+		ZheapInitMetaPage(new_rel_desc, MAIN_FORKNUM);
 
 	/*
 	 * Unlogged objects need an init fork, except for partitioned tables which

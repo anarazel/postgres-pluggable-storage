@@ -21,6 +21,7 @@
 #include "access/transam.h"
 #include "access/xlog.h"
 #include "access/xlogutils.h"
+#include "access/zheap.h"
 #include "storage/procarray.h"
 #include "miscadmin.h"
 
@@ -543,7 +544,6 @@ btree_xlog_delete_get_latestRemovedXid(XLogReaderState *record)
 	ItemId		iitemid,
 				hitemid;
 	IndexTuple	itup;
-	HeapTupleHeader htuphdr;
 	BlockNumber hblkno;
 	OffsetNumber hoffnum;
 	TransactionId latestRemovedXid = InvalidTransactionId;
@@ -622,27 +622,75 @@ btree_xlog_delete_get_latestRemovedXid(XLogReaderState *record)
 		hoffnum = ItemPointerGetOffsetNumber(&(itup->t_tid));
 		hitemid = PageGetItemId(hpage, hoffnum);
 
-		/*
-		 * Follow any redirections until we find something useful.
-		 */
-		while (ItemIdIsRedirected(hitemid))
+		if (!(xlrec->flags & XLOG_BTREE_DELETE_RELATION_STORAGE_ZHEAP))
 		{
-			hoffnum = ItemIdGetRedirect(hitemid);
-			hitemid = PageGetItemId(hpage, hoffnum);
-			CHECK_FOR_INTERRUPTS();
+			/*
+			 * Follow any redirections until we find something useful.
+			 */
+			while (ItemIdIsRedirected(hitemid))
+			{
+				hoffnum = ItemIdGetRedirect(hitemid);
+				hitemid = PageGetItemId(hpage, hoffnum);
+				CHECK_FOR_INTERRUPTS();
+			}
 		}
 
 		/*
 		 * If the heap item has storage, then read the header and use that to
 		 * set latestRemovedXid.
 		 *
+		 * We have special handling for zheap tuples that are deleted and
+		 * don't have storage.
+		 *
 		 * Some LP_DEAD items may not be accessible, so we ignore them.
 		 */
-		if (ItemIdHasStorage(hitemid))
+		if ((xlrec->flags & XLOG_BTREE_DELETE_RELATION_STORAGE_ZHEAP) &&
+			ItemIdIsDeleted(hitemid))
 		{
-			htuphdr = (HeapTupleHeader) PageGetItem(hpage, hitemid);
+			TransactionId	xid;
+			ZHeapTupleData	ztup;
 
-			HeapTupleHeaderAdvanceLatestRemovedXid(htuphdr, &latestRemovedXid);
+			ztup.t_self = itup->t_tid;
+			ztup.t_len = ItemIdGetLength(hitemid);
+			ztup.t_tableOid = InvalidOid;
+			ztup.t_data = NULL;
+			ZHeapTupleGetTransInfo(&ztup, hbuffer, NULL, NULL, &xid, NULL, NULL,
+								   false);
+			if (TransactionIdDidCommit(xid) &&
+				TransactionIdFollows(xid, latestRemovedXid))
+				latestRemovedXid = xid;
+		}
+		else if (ItemIdHasStorage(hitemid))
+		{
+			if ((xlrec->flags & XLOG_BTREE_DELETE_RELATION_STORAGE_ZHEAP) != 0)
+			{
+				ZHeapTupleHeader ztuphdr;
+				ZHeapTupleData	ztup;
+
+				ztuphdr = (ZHeapTupleHeader) PageGetItem(hpage, hitemid);
+				ztup.t_self = itup->t_tid;
+				ztup.t_len = ItemIdGetLength(hitemid);
+				ztup.t_tableOid = InvalidOid;
+				ztup.t_data = ztuphdr;
+
+				if (ztuphdr->t_infomask & ZHEAP_DELETED
+										|| ztuphdr->t_infomask & ZHEAP_UPDATED)
+				{
+					TransactionId	xid;
+
+					ZHeapTupleGetTransInfo(&ztup, hbuffer, NULL, NULL, &xid,
+										   NULL, NULL, false);
+					elog(DEBUG1, "TransactionId: %d",xid);
+					ZHeapTupleHeaderAdvanceLatestRemovedXid(ztuphdr, xid, &latestRemovedXid);
+				}
+			}
+			else
+			{
+				HeapTupleHeader htuphdr;
+				htuphdr = (HeapTupleHeader) PageGetItem(hpage, hitemid);
+
+				HeapTupleHeaderAdvanceLatestRemovedXid(htuphdr, &latestRemovedXid);
+			}
 		}
 		else if (ItemIdIsDead(hitemid))
 		{

@@ -24,6 +24,8 @@
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
+#include "access/tableam.h"
+#include "access/zheap.h"
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
 #include "storage/freespace.h"
@@ -288,6 +290,17 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 
 	/* Do the real work */
 	smgrtruncate(rel->rd_smgr, MAIN_FORKNUM, nblocks);
+
+	/*
+	 * Re-Initialize the meta page for zheap when the relation is completely
+	 * truncated.
+	 *
+	 * ZBORKED: Is this really sufficient / necessary? Why can't we just stop
+	 * truncating so far in the smgrtruncate above? And if we can't do that,
+	 * why isn't the metapage outdated regardless?
+	 */
+	if (RelationStorageIsZHeap(rel) && nblocks <= 0)
+		ZheapInitMetaPage(rel, MAIN_FORKNUM);
 }
 
 /*
