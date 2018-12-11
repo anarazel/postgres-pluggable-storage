@@ -32,6 +32,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/binary_upgrade.h"
 #include "catalog/catalog.h"
@@ -2358,14 +2359,16 @@ AlterDomainNotNull(List *names, bool notNull)
 			RelToCheck *rtc = (RelToCheck *) lfirst(rt);
 			Relation	testrel = rtc->rel;
 			TupleDesc	tupdesc = RelationGetDescr(testrel);
-			HeapScanDesc scan;
-			HeapTuple	tuple;
+			TableScanDesc scan;
+			TupleTableSlot *slot;
 			Snapshot	snapshot;
 
 			/* Scan all tuples in this relation */
 			snapshot = RegisterSnapshot(GetLatestSnapshot());
-			scan = heap_beginscan(testrel, snapshot, 0, NULL);
-			while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+			scan = table_beginscan(testrel, snapshot, 0, NULL);
+			slot = table_gimmegimmeslot(testrel, NULL);
+
+			while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 			{
 				int			i;
 
@@ -2375,7 +2378,7 @@ AlterDomainNotNull(List *names, bool notNull)
 					int			attnum = rtc->atts[i];
 					Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
 
-					if (heap_attisnull(tuple, attnum, tupdesc))
+					if (slot_attisnull(slot, attnum))
 					{
 						/*
 						 * In principle the auxiliary information for this
@@ -2394,7 +2397,9 @@ AlterDomainNotNull(List *names, bool notNull)
 					}
 				}
 			}
-			heap_endscan(scan);
+
+			ExecDropSingleTupleTableSlot(slot);
+			table_endscan(scan);
 			UnregisterSnapshot(snapshot);
 
 			/* Close each rel after processing, but keep lock */
@@ -2757,14 +2762,16 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 		RelToCheck *rtc = (RelToCheck *) lfirst(rt);
 		Relation	testrel = rtc->rel;
 		TupleDesc	tupdesc = RelationGetDescr(testrel);
-		HeapScanDesc scan;
-		HeapTuple	tuple;
+		TableScanDesc scan;
+		TupleTableSlot *slot;
 		Snapshot	snapshot;
 
 		/* Scan all tuples in this relation */
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		scan = heap_beginscan(testrel, snapshot, 0, NULL);
-		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+		scan = table_beginscan(testrel, snapshot, 0, NULL);
+		slot = table_gimmegimmeslot(testrel, NULL);
+
+		while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 		{
 			int			i;
 
@@ -2777,7 +2784,7 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 				Datum		conResult;
 				Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
 
-				d = heap_getattr(tuple, attnum, tupdesc, &isNull);
+				d = slot_getattr(slot, attnum, &isNull);
 
 				econtext->domainValue_datum = d;
 				econtext->domainValue_isNull = isNull;
@@ -2807,7 +2814,9 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 
 			ResetExprContext(econtext);
 		}
-		heap_endscan(scan);
+
+		ExecDropSingleTupleTableSlot(slot);
+		table_endscan(scan);
 		UnregisterSnapshot(snapshot);
 
 		/* Hold relation lock till commit (XXX bad for concurrency) */

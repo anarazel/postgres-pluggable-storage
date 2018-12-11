@@ -36,6 +36,7 @@
 #include "access/nbtree.h"
 #include "access/reloptions.h"
 #include "access/sysattr.h"
+#include "access/tableam.h"
 #include "access/tupdesc_details.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -1196,10 +1197,29 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	}
 
 	/*
-	 * if it's an index, initialize index-related information
+	 * initialize access method information
 	 */
-	if (OidIsValid(relation->rd_rel->relam))
-		RelationInitIndexAccessInfo(relation);
+	switch (relation->rd_rel->relkind)
+	{
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			Assert(relation->rd_rel->relam != InvalidOid);
+			RelationInitIndexAccessInfo(relation);
+			break;
+		case RELKIND_RELATION:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:		/* Not exactly the storage, but underlying
+								 * tuple access, it is required */
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_FOREIGN_TABLE: /* hari FIXME :To support COPY on foreign tables */
+			RelationInitTableAccessMethod(relation);
+			break;
+		default:
+			/* nothing to do in other cases */
+			break;
+	}
 
 	/* extract reloptions if any */
 	RelationParseRelOptions(relation, pg_class_tuple);
@@ -1701,6 +1721,52 @@ LookupOpclassInfo(Oid operatorClassOid,
 	return opcentry;
 }
 
+/*
+ * Fill in the TableAmRoutine for a relation
+ *
+ * relation's rd_tableamhandler must be valid already.
+ */
+static void
+InitTableAmRoutine(Relation relation)
+{
+	relation->rd_tableamroutine = GetTableAmRoutine(relation->rd_tableamhandler);
+}
+
+/*
+ * Initialize table-access-method support data for a heap relation
+ */
+void
+RelationInitTableAccessMethod(Relation relation)
+{
+	HeapTuple	tuple;
+	Form_pg_am	aform;
+
+	if (IsCatalogRelation(relation) ||
+			!OidIsValid(relation->rd_rel->relam))
+	{
+		relation->rd_tableamhandler = HEAP_TABLE_AM_HANDLER_OID;
+	}
+	else
+	{
+		/*
+		 * Look up the table access method, save the OID of its handler
+		 * function.
+		 */
+		tuple = SearchSysCache1(AMOID,
+								ObjectIdGetDatum(relation->rd_rel->relam));
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for access method %u",
+				 relation->rd_rel->relam);
+		aform = (Form_pg_am) GETSTRUCT(tuple);
+		relation->rd_tableamhandler = aform->amhandler;
+		ReleaseSysCache(tuple);
+	}
+
+	/*
+	 * Now we can fetch the table AM's API struct
+	 */
+	InitTableAmRoutine(relation);
+}
 
 /*
  *		formrdesc
@@ -1787,6 +1853,7 @@ formrdesc(const char *relationName, Oid relationReltype,
 	relation->rd_rel->relallvisible = 0;
 	relation->rd_rel->relkind = RELKIND_RELATION;
 	relation->rd_rel->relnatts = (int16) natts;
+	relation->rd_rel->relam = HEAP_TABLE_AM_OID;
 
 	/*
 	 * initialize attribute tuple form
@@ -1853,6 +1920,12 @@ formrdesc(const char *relationName, Oid relationReltype,
 	 * initialize physical addressing information for the relation
 	 */
 	RelationInitPhysicalAddr(relation);
+
+	/*
+	 * initialize the table am handler
+	 */
+	relation->rd_rel->relam = HEAP_TABLE_AM_OID;
+	relation->rd_tableamroutine = GetHeapamTableAmRoutine();
 
 	/*
 	 * initialize the rel-has-index flag, using hardwired knowledge
@@ -3089,6 +3162,7 @@ RelationBuildLocalRelation(const char *relname,
 						   Oid relnamespace,
 						   TupleDesc tupDesc,
 						   Oid relid,
+						   Oid accessmtd,
 						   Oid relfilenode,
 						   Oid reltablespace,
 						   bool shared_relation,
@@ -3267,6 +3341,16 @@ RelationBuildLocalRelation(const char *relname,
 	RelationInitLockInfo(rel);	/* see lmgr.c */
 
 	RelationInitPhysicalAddr(rel);
+
+	rel->rd_rel->relam = accessmtd;
+
+	if (relkind == RELKIND_RELATION ||
+		relkind == RELKIND_MATVIEW ||
+		relkind == RELKIND_VIEW ||	/* Not exactly the storage, but underlying
+									 * tuple access, it is required */
+		relkind == RELKIND_PARTITIONED_TABLE ||
+		relkind == RELKIND_TOASTVALUE)
+		RelationInitTableAccessMethod(rel);
 
 	/*
 	 * Okay to insert into the relcache hash table.
@@ -3784,6 +3868,19 @@ RelationCacheInitializePhase3(void)
 		{
 			RelationBuildPartitionDesc(relation);
 			Assert(relation->rd_partdesc != NULL);
+
+			restart = true;
+		}
+
+		if (relation->rd_tableamroutine == NULL &&
+			(relation->rd_rel->relkind == RELKIND_RELATION ||
+			 relation->rd_rel->relkind == RELKIND_MATVIEW ||
+			 relation->rd_rel->relkind == RELKIND_VIEW ||
+			 relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ||
+			 relation->rd_rel->relkind == RELKIND_TOASTVALUE))
+		{
+			RelationInitTableAccessMethod(relation);
+			Assert(relation->rd_tableamroutine != NULL);
 
 			restart = true;
 		}
@@ -5562,6 +5659,9 @@ load_relcache_init_file(bool shared)
 			/* Count nailed rels to ensure we have 'em all */
 			if (rel->rd_isnailed)
 				nailed_rels++;
+
+			/* Load table AM stuff */
+			RelationInitTableAccessMethod(rel);
 
 			Assert(rel->rd_index == NULL);
 			Assert(rel->rd_indextuple == NULL);
