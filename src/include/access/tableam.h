@@ -113,6 +113,15 @@ typedef struct TableAmRoutine
 	void		(*reset_index_fetch) (struct IndexFetchTableData *data);
 	void		(*end_index_fetch) (struct IndexFetchTableData *data);
 
+	/*
+	 * Compute the newest xid among the tuples pointed to by items. This is
+	 * used to compute what snapshots to conflict with when replaying WAL
+	 * records for page-level index vacuums.
+	 */
+	TransactionId (*compute_xid_horizon_for_tuples) (Relation rel,
+													 ItemPointerData *items,
+													 int nitems);
+
 
 	/* ------------------------------------------------------------------------
 	 * Manipulations of physical tuples.
@@ -442,6 +451,14 @@ table_end_index_fetch_table(struct IndexFetchTableData *scan)
  *  Manipulations of physical tuples.
  * ----------------------------------------------------------------------------
  */
+
+static inline TransactionId
+table_compute_xid_horizon_for_tuples(Relation rel,
+									 ItemPointerData *items,
+									 int nitems)
+{
+	return rel->rd_tableam->compute_xid_horizon_for_tuples(rel, items, nitems);
+}
 
 /*
  * Insert a tuple from a slot into table AM routine
