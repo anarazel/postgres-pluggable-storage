@@ -37,7 +37,6 @@
 
 #include <math.h>
 
-#include "access/heapam.h"
 #include "access/relscan.h"
 #include "access/tableam.h"
 #include "access/transam.h"
@@ -55,7 +54,6 @@
 
 
 static TupleTableSlot *BitmapHeapNext(BitmapHeapScanState *node);
-static void bitgetpage(HeapScanDesc scan, TBMIterateResult *tbmres);
 static inline void BitmapDoneInitializingSharedState(
 								  ParallelBitmapHeapState *pstate);
 static inline void BitmapAdjustPrefetchIterator(BitmapHeapScanState *node,
@@ -78,12 +76,10 @@ BitmapHeapNext(BitmapHeapScanState *node)
 {
 	ExprContext *econtext;
 	TableScanDesc scan;
-	HeapScanDesc hscan;
 	TIDBitmap  *tbm;
 	TBMIterator *tbmiterator = NULL;
 	TBMSharedIterator *shared_tbmiterator = NULL;
 	TBMIterateResult *tbmres;
-	OffsetNumber targoffset;
 	TupleTableSlot *slot;
 	ParallelBitmapHeapState *pstate = node->pstate;
 	dsa_area   *dsa = node->ss.ps.state->es_query_dsa;
@@ -94,7 +90,6 @@ BitmapHeapNext(BitmapHeapScanState *node)
 	econtext = node->ss.ps.ps_ExprContext;
 	slot = node->ss.ss_ScanTupleSlot;
 	scan = node->ss.ss_currentScanDesc;
-	hscan = (HeapScanDesc) scan;
 	tbm = node->tbm;
 	if (pstate == NULL)
 		tbmiterator = node->tbmiterator;
@@ -194,16 +189,27 @@ BitmapHeapNext(BitmapHeapScanState *node)
 
 	for (;;)
 	{
-		Page		dp;
-		ItemId		lp;
-
 		CHECK_FOR_INTERRUPTS();
 
-		/*
-		 * Get next page of results if needed
-		 */
-		if (tbmres == NULL)
+		if (node->return_empty_tuples > 0)
 		{
+			ExecStoreAllNullTuple(slot);
+			node->return_empty_tuples--;
+		}
+		else if (tbmres)
+		{
+			if (!table_scan_bitmap_pagescan_next(scan, slot))
+			{
+				node->tbmres = tbmres = NULL;
+				continue;
+			}
+		}
+		else
+		{
+			/*
+			 * Get next page of results if needed
+			 */
+
 			if (!pstate)
 				node->tbmres = tbmres = tbm_iterate(tbmiterator);
 			else
@@ -215,18 +221,6 @@ BitmapHeapNext(BitmapHeapScanState *node)
 			}
 
 			BitmapAdjustPrefetchIterator(node, tbmres);
-
-			/*
-			 * Ignore any claimed entries past what we think is the end of the
-			 * relation.  (This is probably not necessary given that we got at
-			 * least AccessShareLock on the table before performing any of the
-			 * indexscans, but let's be safe.)
-			 */
-			if (tbmres->blockno >= hscan->rs_nblocks)
-			{
-				node->tbmres = tbmres = NULL;
-				continue;
-			}
 
 			/*
 			 * We can skip fetching the heap page if we don't need any fields
@@ -243,16 +237,21 @@ BitmapHeapNext(BitmapHeapScanState *node)
 			{
 				/*
 				 * The number of tuples on this page is put into
-				 * scan->rs_ntuples; note we don't fill scan->rs_vistuples.
+				 * node->return_empty_tuples; note we don't fill
+				 * scan->rs_vistuples.
 				 */
-				hscan->rs_ntuples = tbmres->ntuples;
+				node->return_empty_tuples = tbmres->ntuples;
 			}
 			else
 			{
 				/*
 				 * Fetch the current heap page and identify candidate tuples.
 				 */
-				bitgetpage(hscan, tbmres);
+				if (!table_scan_bitmap_pagescan(scan, tbmres))
+				{
+					/* AM doesn't think this block is valid, skip */
+					continue;
+				}
 			}
 
 			if (tbmres->ntuples >= 0)
@@ -260,51 +259,37 @@ BitmapHeapNext(BitmapHeapScanState *node)
 			else
 				node->lossy_pages++;
 
-			/*
-			 * Set rs_cindex to first slot to examine
-			 */
-			hscan->rs_cindex = 0;
-
 			/* Adjust the prefetch target */
 			BitmapAdjustPrefetchTarget(node);
-		}
-		else
-		{
+
 			/*
-			 * Continuing in previously obtained page; advance rs_cindex
+			 * XXX: Note we do not prefetch here.
 			 */
-			hscan->rs_cindex++;
+
+			continue;
+		}
+
 
 #ifdef USE_PREFETCH
 
-			/*
-			 * Try to prefetch at least a few pages even before we get to the
-			 * second page if we don't stop reading after the first tuple.
-			 */
-			if (!pstate)
-			{
-				if (node->prefetch_target < node->prefetch_maximum)
-					node->prefetch_target++;
-			}
-			else if (pstate->prefetch_target < node->prefetch_maximum)
-			{
-				/* take spinlock while updating shared state */
-				SpinLockAcquire(&pstate->mutex);
-				if (pstate->prefetch_target < node->prefetch_maximum)
-					pstate->prefetch_target++;
-				SpinLockRelease(&pstate->mutex);
-			}
-#endif							/* USE_PREFETCH */
-		}
-
 		/*
-		 * Out of range?  If so, nothing more to look at on this page
+		 * Try to prefetch at least a few pages even before we get to the
+		 * second page if we don't stop reading after the first tuple.
 		 */
-		if (hscan->rs_cindex < 0 || hscan->rs_cindex >= hscan->rs_ntuples)
+		if (!pstate)
 		{
-			node->tbmres = tbmres = NULL;
-			continue;
+			if (node->prefetch_target < node->prefetch_maximum)
+				node->prefetch_target++;
 		}
+		else if (pstate->prefetch_target < node->prefetch_maximum)
+		{
+			/* take spinlock while updating shared state */
+			SpinLockAcquire(&pstate->mutex);
+			if (pstate->prefetch_target < node->prefetch_maximum)
+				pstate->prefetch_target++;
+			SpinLockRelease(&pstate->mutex);
+		}
+#endif							/* USE_PREFETCH */
 
 		/*
 		 * We issue prefetch requests *after* fetching the current page to try
@@ -315,52 +300,19 @@ BitmapHeapNext(BitmapHeapScanState *node)
 		 */
 		BitmapPrefetch(node, scan);
 
-		if (node->skip_fetch)
+		/*
+		 * If we are using lossy info, we have to recheck the qual conditions
+		 * at every tuple.
+		 */
+		if (tbmres->recheck)
 		{
-			/*
-			 * If we don't have to fetch the tuple, just return nulls.
-			 */
-			ExecStoreAllNullTuple(slot);
-		}
-		else
-		{
-			/*
-			 * Okay to fetch the tuple.
-			 */
-			targoffset = hscan->rs_vistuples[hscan->rs_cindex];
-			dp = (Page) BufferGetPage(hscan->rs_cbuf);
-			lp = PageGetItemId(dp, targoffset);
-			Assert(ItemIdIsNormal(lp));
-
-			hscan->rs_ctup.t_data = (HeapTupleHeader) PageGetItem((Page) dp, lp);
-			hscan->rs_ctup.t_len = ItemIdGetLength(lp);
-			hscan->rs_ctup.t_tableOid = scan->rs_rd->rd_id;
-			ItemPointerSet(&hscan->rs_ctup.t_self, tbmres->blockno, targoffset);
-
-			pgstat_count_heap_fetch(scan->rs_rd);
-
-			/*
-			 * Set up the result slot to point to this tuple.  Note that the
-			 * slot acquires a pin on the buffer.
-			 */
-			ExecStoreBufferHeapTuple(&hscan->rs_ctup,
-									 slot,
-									 hscan->rs_cbuf);
-
-			/*
-			 * If we are using lossy info, we have to recheck the qual
-			 * conditions at every tuple.
-			 */
-			if (tbmres->recheck)
+			econtext->ecxt_scantuple = slot;
+			if (!ExecQualAndReset(node->bitmapqualorig, econtext))
 			{
-				econtext->ecxt_scantuple = slot;
-				if (!ExecQualAndReset(node->bitmapqualorig, econtext))
-				{
-					/* Fails recheck, so drop it and loop back for another */
-					InstrCountFiltered2(node, 1);
-					ExecClearTuple(slot);
-					continue;
-				}
+				/* Fails recheck, so drop it and loop back for another */
+				InstrCountFiltered2(node, 1);
+				ExecClearTuple(slot);
+				continue;
 			}
 		}
 
@@ -372,110 +324,6 @@ BitmapHeapNext(BitmapHeapScanState *node)
 	 * if we get here it means we are at the end of the scan..
 	 */
 	return ExecClearTuple(slot);
-}
-
-/*
- * bitgetpage - subroutine for BitmapHeapNext()
- *
- * This routine reads and pins the specified page of the relation, then
- * builds an array indicating which tuples on the page are both potentially
- * interesting according to the bitmap, and visible according to the snapshot.
- */
-static void
-bitgetpage(HeapScanDesc scan, TBMIterateResult *tbmres)
-{
-	BlockNumber page = tbmres->blockno;
-	Buffer		buffer;
-	Snapshot	snapshot;
-	int			ntup;
-
-	/*
-	 * Acquire pin on the target heap page, trading in any pin we held before.
-	 */
-	Assert(page < scan->rs_nblocks);
-
-	scan->rs_cbuf = ReleaseAndReadBuffer(scan->rs_cbuf,
-										 scan->rs_scan.rs_rd,
-										 page);
-	buffer = scan->rs_cbuf;
-	snapshot = scan->rs_scan.rs_snapshot;
-
-	ntup = 0;
-
-	/*
-	 * Prune and repair fragmentation for the whole page, if possible.
-	 */
-	heap_page_prune_opt(scan->rs_scan.rs_rd, buffer);
-
-	/*
-	 * We must hold share lock on the buffer content while examining tuple
-	 * visibility.  Afterwards, however, the tuples we have found to be
-	 * visible are guaranteed good as long as we hold the buffer pin.
-	 */
-	LockBuffer(buffer, BUFFER_LOCK_SHARE);
-
-	/*
-	 * We need two separate strategies for lossy and non-lossy cases.
-	 */
-	if (tbmres->ntuples >= 0)
-	{
-		/*
-		 * Bitmap is non-lossy, so we just look through the offsets listed in
-		 * tbmres; but we have to follow any HOT chain starting at each such
-		 * offset.
-		 */
-		int			curslot;
-
-		for (curslot = 0; curslot < tbmres->ntuples; curslot++)
-		{
-			OffsetNumber offnum = tbmres->offsets[curslot];
-			ItemPointerData tid;
-			HeapTupleData heapTuple;
-
-			ItemPointerSet(&tid, page, offnum);
-			if (heap_hot_search_buffer(&tid, scan->rs_scan.rs_rd, buffer, snapshot,
-									   &heapTuple, NULL, true))
-				scan->rs_vistuples[ntup++] = ItemPointerGetOffsetNumber(&tid);
-		}
-	}
-	else
-	{
-		/*
-		 * Bitmap is lossy, so we must examine each item pointer on the page.
-		 * But we can ignore HOT chains, since we'll check each tuple anyway.
-		 */
-		Page		dp = (Page) BufferGetPage(buffer);
-		OffsetNumber maxoff = PageGetMaxOffsetNumber(dp);
-		OffsetNumber offnum;
-
-		for (offnum = FirstOffsetNumber; offnum <= maxoff; offnum = OffsetNumberNext(offnum))
-		{
-			ItemId		lp;
-			HeapTupleData loctup;
-			bool		valid;
-
-			lp = PageGetItemId(dp, offnum);
-			if (!ItemIdIsNormal(lp))
-				continue;
-			loctup.t_data = (HeapTupleHeader) PageGetItem((Page) dp, lp);
-			loctup.t_len = ItemIdGetLength(lp);
-			loctup.t_tableOid = scan->rs_scan.rs_rd->rd_id;
-			ItemPointerSet(&loctup.t_self, page, offnum);
-			valid = HeapTupleSatisfiesVisibility(&loctup, snapshot, buffer);
-			if (valid)
-			{
-				scan->rs_vistuples[ntup++] = offnum;
-				PredicateLockTuple(scan->rs_scan.rs_rd, &loctup, snapshot);
-			}
-			CheckForSerializableConflictOut(valid, scan->rs_scan.rs_rd, &loctup,
-											buffer, snapshot);
-		}
-	}
-
-	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
-
-	Assert(ntup <= MaxHeapTuplesPerPage);
-	scan->rs_ntuples = ntup;
 }
 
 /*

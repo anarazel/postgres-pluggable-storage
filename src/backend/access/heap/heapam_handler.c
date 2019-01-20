@@ -1796,6 +1796,151 @@ heapam_index_validate_scan(Relation heapRelation,
 	indexInfo->ii_PredicateState = NULL;
 }
 
+static bool
+heapam_scan_bitmap_pagescan(TableScanDesc sscan,
+							TBMIterateResult *tbmres)
+{
+	HeapScanDesc scan = (HeapScanDesc) sscan;
+	BlockNumber page = tbmres->blockno;
+	Buffer		buffer;
+	Snapshot	snapshot;
+	int			ntup;
+
+	scan->rs_cindex = 0;
+	scan->rs_ntuples = 0;
+
+	/*
+	 * Ignore any claimed entries past what we think is the end of the
+	 * relation.  (This is probably not necessary given that we got at least
+	 * AccessShareLock on the table before performing any of the indexscans,
+	 * but let's be safe.)
+	 */
+	if (page >= scan->rs_nblocks)
+		return false;
+
+	scan->rs_cbuf = ReleaseAndReadBuffer(scan->rs_cbuf,
+										 scan->rs_scan.rs_rd,
+										 page);
+	scan->rs_cblock = page;
+	buffer = scan->rs_cbuf;
+	snapshot = scan->rs_scan.rs_snapshot;
+
+	ntup = 0;
+
+	/*
+	 * Prune and repair fragmentation for the whole page, if possible.
+	 */
+	heap_page_prune_opt(scan->rs_scan.rs_rd, buffer);
+
+	/*
+	 * We must hold share lock on the buffer content while examining tuple
+	 * visibility.  Afterwards, however, the tuples we have found to be
+	 * visible are guaranteed good as long as we hold the buffer pin.
+	 */
+	LockBuffer(buffer, BUFFER_LOCK_SHARE);
+
+	/*
+	 * We need two separate strategies for lossy and non-lossy cases.
+	 */
+	if (tbmres->ntuples >= 0)
+	{
+		/*
+		 * Bitmap is non-lossy, so we just look through the offsets listed in
+		 * tbmres; but we have to follow any HOT chain starting at each such
+		 * offset.
+		 */
+		int			curslot;
+
+		for (curslot = 0; curslot < tbmres->ntuples; curslot++)
+		{
+			OffsetNumber offnum = tbmres->offsets[curslot];
+			ItemPointerData tid;
+			HeapTupleData heapTuple;
+
+			ItemPointerSet(&tid, page, offnum);
+			if (heap_hot_search_buffer(&tid, sscan->rs_rd, buffer, snapshot,
+									   &heapTuple, NULL, true))
+				scan->rs_vistuples[ntup++] = ItemPointerGetOffsetNumber(&tid);
+		}
+	}
+	else
+	{
+		/*
+		 * Bitmap is lossy, so we must examine each item pointer on the page.
+		 * But we can ignore HOT chains, since we'll check each tuple anyway.
+		 */
+		Page		dp = (Page) BufferGetPage(buffer);
+		OffsetNumber maxoff = PageGetMaxOffsetNumber(dp);
+		OffsetNumber offnum;
+
+		for (offnum = FirstOffsetNumber; offnum <= maxoff; offnum = OffsetNumberNext(offnum))
+		{
+			ItemId		lp;
+			HeapTupleData loctup;
+			bool		valid;
+
+			lp = PageGetItemId(dp, offnum);
+			if (!ItemIdIsNormal(lp))
+				continue;
+			loctup.t_data = (HeapTupleHeader) PageGetItem((Page) dp, lp);
+			loctup.t_len = ItemIdGetLength(lp);
+			loctup.t_tableOid = scan->rs_scan.rs_rd->rd_id;
+			ItemPointerSet(&loctup.t_self, page, offnum);
+			valid = HeapTupleSatisfiesVisibility(&loctup, snapshot, buffer);
+			if (valid)
+			{
+				scan->rs_vistuples[ntup++] = offnum;
+				PredicateLockTuple(scan->rs_scan.rs_rd, &loctup, snapshot);
+			}
+			CheckForSerializableConflictOut(valid, scan->rs_scan.rs_rd, &loctup,
+											buffer, snapshot);
+		}
+	}
+
+	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+
+	Assert(ntup <= MaxHeapTuplesPerPage);
+	scan->rs_ntuples = ntup;
+
+	return ntup > 0;
+}
+
+static bool
+heapam_scan_bitmap_pagescan_next(TableScanDesc sscan, TupleTableSlot *slot)
+{
+	HeapScanDesc scan = (HeapScanDesc) sscan;
+	OffsetNumber targoffset;
+	Page		dp;
+	ItemId		lp;
+
+	if (scan->rs_cindex < 0 || scan->rs_cindex >= scan->rs_ntuples)
+		return false;
+
+	targoffset = scan->rs_vistuples[scan->rs_cindex];
+	dp = (Page) BufferGetPage(scan->rs_cbuf);
+	lp = PageGetItemId(dp, targoffset);
+	Assert(ItemIdIsNormal(lp));
+
+	scan->rs_ctup.t_data = (HeapTupleHeader) PageGetItem((Page) dp, lp);
+	scan->rs_ctup.t_len = ItemIdGetLength(lp);
+	scan->rs_ctup.t_tableOid = scan->rs_scan.rs_rd->rd_id;
+	ItemPointerSet(&scan->rs_ctup.t_self, scan->rs_cblock, targoffset);
+
+	pgstat_count_heap_fetch(scan->rs_scan.rs_rd);
+
+	/*
+	 * Set up the result slot to point to this tuple.  Note that the slot
+	 * acquires a pin on the buffer.
+	 */
+	ExecStoreBufferHeapTuple(&scan->rs_ctup,
+							 slot,
+							 scan->rs_cbuf);
+
+	scan->rs_cindex++;
+
+	return true;
+}
+
 /*
  * Check visibility of the tuple.
  */
@@ -2198,6 +2343,8 @@ static const TableAmRoutine heapam_methods = {
 
 	.relation_estimate_size = heapam_estimate_rel_size,
 
+	.scan_bitmap_pagescan = heapam_scan_bitmap_pagescan,
+	.scan_bitmap_pagescan_next = heapam_scan_bitmap_pagescan_next,
 	.scan_sample_next_block = heapam_scan_sample_next_block,
 	.scan_sample_next_tuple = heapam_scan_sample_next_tuple
 };

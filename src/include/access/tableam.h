@@ -247,6 +247,10 @@ typedef struct TableAmRoutine
 	 * ------------------------------------------------------------------------
 	 */
 
+	bool		(*scan_bitmap_pagescan) (TableScanDesc scan,
+										 TBMIterateResult *tbmres);
+	bool		(*scan_bitmap_pagescan_next) (TableScanDesc scan,
+											  TupleTableSlot *slot);
 	bool		(*scan_sample_next_block) (TableScanDesc scan,
 										   struct SampleScanState *scanstate);
 	bool		(*scan_sample_next_tuple) (TableScanDesc scan,
@@ -727,6 +731,19 @@ table_estimate_size(Relation rel, int32 *attr_widths,
  * Executor related functionality
  * ----------------------------------------------------------------------------
  */
+
+static inline bool
+table_scan_bitmap_pagescan(TableScanDesc scan,
+						   TBMIterateResult *tbmres)
+{
+	return scan->rs_rd->rd_tableam->scan_bitmap_pagescan(scan, tbmres);
+}
+
+static inline bool
+table_scan_bitmap_pagescan_next(TableScanDesc scan, TupleTableSlot *slot)
+{
+	return scan->rs_rd->rd_tableam->scan_bitmap_pagescan_next(scan, slot);
+}
 
 static inline bool
 table_scan_sample_next_block(TableScanDesc scan, struct SampleScanState *scanstate)

@@ -273,7 +273,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			info->amsearchnulls = amroutine->amsearchnulls;
 			info->amcanparallel = amroutine->amcanparallel;
 			info->amhasgettuple = (amroutine->amgettuple != NULL);
-			info->amhasgetbitmap = (amroutine->amgetbitmap != NULL);
+			info->amhasgetbitmap = amroutine->amgetbitmap != NULL &&
+				relation->rd_tableam->scan_bitmap_pagescan != NULL;
 			info->amcostestimate = amroutine->amcostestimate;
 			Assert(info->amcostestimate != NULL);
 
