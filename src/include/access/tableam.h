@@ -27,6 +27,7 @@ extern char *default_table_access_method;
 extern bool synchronize_seqscans;
 
 
+struct VacuumParams;
 struct ValidateIndexState;
 struct BulkInsertStateData;
 
@@ -204,6 +205,12 @@ typedef struct TableAmRoutine
 											  MultiXactId *minmulti);
 	void		(*relation_nontransactional_truncate) (Relation rel);
 	void		(*relation_copy_data) (Relation rel, RelFileNode newrnode);
+	void		(*relation_vacuum) (Relation onerel, int options,
+									struct VacuumParams *params, BufferAccessStrategy bstrategy);
+	void		(*scan_analyze_next_block) (TableScanDesc scan, BlockNumber blockno,
+											BufferAccessStrategy bstrategy);
+	bool		(*scan_analyze_next_tuple) (TableScanDesc scan, TransactionId OldestXmin,
+											double *liverows, double *deadrows, TupleTableSlot *slot);
 	void		(*relation_copy_for_cluster) (Relation NewHeap, Relation OldHeap, Relation OldIndex,
 											  bool use_sort,
 											  TransactionId OldestXmin, TransactionId FreezeXid, MultiXactId MultiXactCutoff,
@@ -588,6 +595,24 @@ table_relation_copy_data(Relation rel, RelFileNode newrnode)
 	rel->rd_tableam->relation_copy_data(rel, newrnode);
 }
 
+static inline void
+table_vacuum_rel(Relation rel, int options,
+				 struct VacuumParams *params, BufferAccessStrategy bstrategy)
+{
+	rel->rd_tableam->relation_vacuum(rel, options, params, bstrategy);
+}
+
+static inline void
+table_scan_analyze_next_block(TableScanDesc scan, BlockNumber blockno, BufferAccessStrategy bstrategy)
+{
+	scan->rs_rd->rd_tableam->scan_analyze_next_block(scan, blockno, bstrategy);
+}
+
+static inline bool
+table_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin, double *liverows, double *deadrows, TupleTableSlot *slot)
+{
+	return scan->rs_rd->rd_tableam->scan_analyze_next_tuple(scan, OldestXmin, liverows, deadrows, slot);
+}
 
 /* XXX: Move arguments to struct? */
 static inline void

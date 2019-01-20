@@ -1711,7 +1711,7 @@ vacuum_rel(Oid relid, RangeVar *relation, int options, VacuumParams *params)
 		cluster_rel(relid, InvalidOid, cluster_options);
 	}
 	else
-		heap_vacuum_rel(onerel, options, params, vac_strategy);
+		table_vacuum_rel(onerel, options, params, vac_strategy);
 
 	/* Roll back any GUC changes executed by index functions */
 	AtEOXact_GUC(false, save_nestlevel);
