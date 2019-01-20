@@ -146,6 +146,8 @@ typedef struct TableAmRoutine
 								 HeapUpdateFailureData *hufd,
 								 LockTupleMode *lockmode,
 								 bool *update_indexes);
+	void		(*multi_insert) (Relation rel, TupleTableSlot **slots, int nslots,
+								 CommandId cid, int options, struct BulkInsertStateData *bistate);
 	HTSU_Result (*tuple_lock) (Relation rel,
 							   ItemPointer tid,
 							   Snapshot snapshot,
@@ -417,6 +419,17 @@ table_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
 										 cid, snapshot, crosscheck,
 										 wait, hufd,
 										 lockmode, update_indexes);
+}
+
+/*
+ *	table_multi_insert	- insert multiple tuple into a table
+ */
+static inline void
+table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
+				   CommandId cid, int options, struct BulkInsertStateData *bistate)
+{
+	rel->rd_tableam->multi_insert(rel, slots, nslots,
+								  cid, options, bistate);
 }
 
 /*

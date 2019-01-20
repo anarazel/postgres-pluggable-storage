@@ -561,6 +561,7 @@ static const TableAmRoutine heapam_methods = {
 	.tuple_complete_speculative = heapam_heap_complete_speculative,
 	.tuple_delete = heapam_heap_delete,
 	.tuple_update = heapam_heap_update,
+	.multi_insert = heap_multi_insert,
 	.tuple_lock = heapam_lock_tuple,
 
 	.tuple_fetch_row_version = heapam_fetch_row_version,

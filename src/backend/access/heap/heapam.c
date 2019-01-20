@@ -2188,7 +2188,7 @@ heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
  * temporary context before calling this, if that's a problem.
  */
 void
-heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
+heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 				  CommandId cid, int options, BulkInsertState bistate)
 {
 	TransactionId xid = GetCurrentTransactionId();
@@ -2209,11 +2209,16 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 	saveFreeSpace = RelationGetTargetPageFreeSpace(relation,
 												   HEAP_DEFAULT_FILLFACTOR);
 
-	/* Toast and set header data in all the tuples */
+	/* Toast and set header data in all the slots */
 	heaptuples = palloc(ntuples * sizeof(HeapTuple));
 	for (i = 0; i < ntuples; i++)
-		heaptuples[i] = heap_prepare_insert(relation, tuples[i],
+	{
+		heaptuples[i] = heap_prepare_insert(relation, ExecFetchSlotHeapTuple(slots[i], true, NULL),
 											xid, cid, options);
+
+		if (slots[i]->tts_tableOid != InvalidOid)
+			heaptuples[i]->t_tableOid = slots[i]->tts_tableOid;
+	}
 
 	/*
 	 * We're about to do the actual inserts -- but check for conflict first,
@@ -2449,7 +2454,7 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 	 * probably faster to always copy than check.
 	 */
 	for (i = 0; i < ntuples; i++)
-		tuples[i]->t_self = heaptuples[i]->t_self;
+		slots[i]->tts_tid = heaptuples[i]->t_self;
 
 	pgstat_count_heap_insert(relation, ntuples);
 }
