@@ -3818,12 +3818,13 @@ comparetup_cluster(const SortTuple *a, const SortTuple *b,
 static void
 copytup_cluster(Tuplesortstate *state, SortTuple *stup, void *tup)
 {
-	HeapTuple	tuple = (HeapTuple) tup;
+	TupleTableSlot *slot = (TupleTableSlot *) tup;
+	HeapTuple	tuple;
 	Datum		original;
 	MemoryContext oldcontext = MemoryContextSwitchTo(state->tuplecontext);
 
 	/* copy the tuple into sort storage */
-	tuple = heap_copytuple(tuple);
+	tuple = ExecCopySlotHeapTuple(slot);
 	stup->tuple = (void *) tuple;
 	USEMEM(state, GetMemoryChunkSpace(tuple));
 

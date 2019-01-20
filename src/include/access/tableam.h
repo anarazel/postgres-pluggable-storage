@@ -198,6 +198,16 @@ typedef struct TableAmRoutine
 	 * ------------------------------------------------------------------------
 	 */
 
+	void		(*relation_set_new_filenode) (Relation rel,
+											  char persistence,
+											  TransactionId *freezeXid,
+											  MultiXactId *minmulti);
+	void		(*relation_nontransactional_truncate) (Relation rel);
+	void		(*relation_copy_data) (Relation rel, RelFileNode newrnode);
+	void		(*relation_copy_for_cluster) (Relation NewHeap, Relation OldHeap, Relation OldIndex,
+											  bool use_sort,
+											  TransactionId OldestXmin, TransactionId FreezeXid, MultiXactId MultiXactCutoff,
+											  double *num_tuples, double *tups_vacuumed, double *tups_recently_dead);
 	double		(*index_build_range_scan) (Relation heap_rel,
 										   Relation index_rel,
 										   IndexInfo *index_nfo,
@@ -553,6 +563,44 @@ table_tuple_satisfies_snapshot(Relation rel, TupleTableSlot *slot, Snapshot snap
 }
 
 
+/* ----------------------------------------------------------------------------
+ * DDL related functionality
+ * ----------------------------------------------------------------------------
+ */
+
+static inline void
+table_set_new_filenode(Relation rel, char persistence,
+					   TransactionId *freezeXid, MultiXactId *minmulti)
+{
+	rel->rd_tableam->relation_set_new_filenode(rel, persistence,
+											   freezeXid, minmulti);
+}
+
+static inline void
+table_nontransactional_truncate(Relation rel)
+{
+	rel->rd_tableam->relation_nontransactional_truncate(rel);
+}
+
+static inline void
+table_relation_copy_data(Relation rel, RelFileNode newrnode)
+{
+	rel->rd_tableam->relation_copy_data(rel, newrnode);
+}
+
+
+/* XXX: Move arguments to struct? */
+static inline void
+table_copy_for_cluster(Relation OldHeap, Relation NewHeap, Relation OldIndex,
+					   bool use_sort,
+					   TransactionId OldestXmin, TransactionId FreezeXid, MultiXactId MultiXactCutoff,
+					   double *num_tuples, double *tups_vacuumed, double *tups_recently_dead)
+{
+	OldHeap->rd_tableam->relation_copy_for_cluster(OldHeap, NewHeap, OldIndex,
+												   use_sort,
+												   OldestXmin, FreezeXid, MultiXactCutoff,
+												   num_tuples, tups_vacuumed, tups_recently_dead);
+}
 
 static inline double
 table_index_build_scan(Relation heap_rel,

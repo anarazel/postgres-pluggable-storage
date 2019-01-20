@@ -83,6 +83,9 @@ typedef struct IndexFetchHeapData
 	/* NB: if xs_cbuf is not InvalidBuffer, we hold a pin on that buffer */
 } IndexFetchHeapData;
 
+/* struct definition is private to rewriteheap.c */
+typedef struct RewriteStateData *RewriteState;
+
 /* Result codes for HeapTupleSatisfiesVacuum */
 typedef enum
 {
@@ -226,5 +229,14 @@ extern bool ResolveCminCmaxDuringDecoding(struct HTAB *tuplecid_data,
 							  HeapTuple htup,
 							  Buffer buffer,
 							  CommandId *cmin, CommandId *cmax);
+
+/* in heap/rewriteheap.c */
+extern RewriteState begin_heap_rewrite(Relation OldHeap, Relation NewHeap,
+				   TransactionId OldestXmin, TransactionId FreezeXid,
+				   MultiXactId MultiXactCutoff, bool use_wal);
+extern void end_heap_rewrite(RewriteState state);
+extern void rewrite_heap_tuple(RewriteState state, HeapTuple oldTuple,
+				   HeapTuple newTuple);
+extern bool rewrite_heap_dead_tuple(RewriteState state, HeapTuple oldTuple);
 
 #endif							/* HEAPAM_H */
