@@ -34,6 +34,7 @@
 #include "access/relscan.h"
 #include "access/tableam.h"
 #include "access/tupdesc.h"
+#include "access/tableam.h"
 #include "access/visibilitymap.h"
 #include "executor/execdebug.h"
 #include "executor/nodeIndexonlyscan.h"
@@ -206,6 +207,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 			Assert(slot->tts_tupleDescriptor->natts ==
 				   scandesc->xs_hitupdesc->natts);
 			ExecForceStoreHeapTuple(scandesc->xs_hitup, slot);
+			slot->tts_tableOid = RelationGetRelid(scandesc->heapRelation);
 		}
 		else if (scandesc->xs_itup)
 			StoreIndexTuple(slot, scandesc->xs_itup, scandesc->xs_itupdesc);

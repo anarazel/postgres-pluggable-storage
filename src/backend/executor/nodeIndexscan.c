@@ -173,7 +173,6 @@ IndexNextWithReorder(IndexScanState *node)
 	EState	   *estate;
 	ExprContext *econtext;
 	IndexScanDesc scandesc;
-	HeapTuple	tuple;
 	TupleTableSlot *slot;
 	ReorderTuple *topmost = NULL;
 	bool		was_exact;
@@ -242,9 +241,12 @@ IndexNextWithReorder(IndexScanState *node)
 								scandesc->xs_orderbynulls,
 								node) <= 0)
 			{
+				HeapTuple tuple;
+
 				tuple = reorderqueue_pop(node);
 
 				/* Pass 'true', as the tuple in the queue is a palloc'd copy */
+				slot->tts_tableOid = RelationGetRelid(scandesc->heapRelation);
 				ExecStoreHeapTuple(tuple, slot, true);
 				return slot;
 			}

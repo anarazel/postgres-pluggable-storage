@@ -126,12 +126,12 @@
 
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
+#include "storage/procarray.h"
 #include "storage/smgr.h"
 
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
-#include "storage/procarray.h"
 
 /*
  * State associated with a rewrite operation. This is opaque to the user
@@ -652,7 +652,7 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 	}
 	else if (HeapTupleHasExternal(tup) || tup->t_len > TOAST_TUPLE_THRESHOLD)
 	{
-		int options = HEAP_INSERT_SKIP_FSM;
+		int			options = HEAP_INSERT_SKIP_FSM;
 
 		if (!state->rs_use_wal)
 			options |= HEAP_INSERT_SKIP_WAL;
