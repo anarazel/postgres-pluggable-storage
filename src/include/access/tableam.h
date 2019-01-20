@@ -29,6 +29,7 @@ extern bool synchronize_seqscans;
 
 struct VacuumParams;
 struct ValidateIndexState;
+struct SampleScanState;
 struct BulkInsertStateData;
 
 /*
@@ -239,6 +240,18 @@ typedef struct TableAmRoutine
 
 	void		(*relation_estimate_size) (Relation rel, int32 *attr_widths,
 										   BlockNumber *pages, double *tuples, double *allvisfrac);
+
+
+	/* ------------------------------------------------------------------------
+	 * Executor related functions.
+	 * ------------------------------------------------------------------------
+	 */
+
+	bool		(*scan_sample_next_block) (TableScanDesc scan,
+										   struct SampleScanState *scanstate);
+	bool		(*scan_sample_next_tuple) (TableScanDesc scan,
+										   struct SampleScanState *scanstate,
+										   TupleTableSlot *slot);
 } TableAmRoutine;
 
 
@@ -707,6 +720,24 @@ table_estimate_size(Relation rel, int32 *attr_widths,
 {
 	rel->rd_tableam->relation_estimate_size(rel, attr_widths,
 											pages, tuples, allvisfrac);
+}
+
+
+/* ----------------------------------------------------------------------------
+ * Executor related functionality
+ * ----------------------------------------------------------------------------
+ */
+
+static inline bool
+table_scan_sample_next_block(TableScanDesc scan, struct SampleScanState *scanstate)
+{
+	return scan->rs_rd->rd_tableam->scan_sample_next_block(scan, scanstate);
+}
+
+static inline bool
+table_scan_sample_next_tuple(TableScanDesc scan, struct SampleScanState *scanstate, TupleTableSlot *slot)
+{
+	return scan->rs_rd->rd_tableam->scan_sample_next_tuple(scan, scanstate, slot);
 }
 
 

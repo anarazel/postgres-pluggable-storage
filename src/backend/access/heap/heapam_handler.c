@@ -27,6 +27,7 @@
 #include "access/heapam.h"
 #include "access/multixact.h"
 #include "access/tableam.h"
+#include "access/tsmapi.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/index.h"
@@ -35,6 +36,7 @@
 #include "catalog/storage_xlog.h"
 #include "executor/executor.h"
 #include "optimizer/plancat.h"
+#include "pgstat.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/bufmgr.h"
@@ -1795,6 +1797,218 @@ heapam_index_validate_scan(Relation heapRelation,
 }
 
 /*
+ * Check visibility of the tuple.
+ */
+static bool
+SampleHeapTupleVisible(HeapScanDesc scan, Buffer buffer,
+					   HeapTuple tuple,
+					   OffsetNumber tupoffset)
+{
+	if (scan->rs_scan.rs_pageatatime)
+	{
+		/*
+		 * In pageatatime mode, heapgetpage() already did visibility checks,
+		 * so just look at the info it left in rs_vistuples[].
+		 *
+		 * We use a binary search over the known-sorted array.  Note: we could
+		 * save some effort if we insisted that NextSampleTuple select tuples
+		 * in increasing order, but it's not clear that there would be enough
+		 * gain to justify the restriction.
+		 */
+		int			start = 0,
+					end = scan->rs_ntuples - 1;
+
+		while (start <= end)
+		{
+			int			mid = (start + end) / 2;
+			OffsetNumber curoffset = scan->rs_vistuples[mid];
+
+			if (tupoffset == curoffset)
+				return true;
+			else if (tupoffset < curoffset)
+				end = mid - 1;
+			else
+				start = mid + 1;
+		}
+
+		return false;
+	}
+	else
+	{
+		/* Otherwise, we have to check the tuple individually. */
+		return HeapTupleSatisfiesVisibility(tuple, scan->rs_scan.rs_snapshot,
+											buffer);
+	}
+}
+
+static bool
+heapam_scan_sample_next_block(TableScanDesc sscan, struct SampleScanState *scanstate)
+{
+	HeapScanDesc scan = (HeapScanDesc) sscan;
+	TsmRoutine *tsm = scanstate->tsmroutine;
+	BlockNumber blockno;
+
+	/* return false immediately if relation is empty */
+	if (scan->rs_nblocks == 0)
+		return false;
+
+	if (tsm->NextSampleBlock)
+	{
+		blockno = tsm->NextSampleBlock(scanstate, scan->rs_nblocks);
+		scan->rs_cblock = blockno;
+	}
+	else
+	{
+		/* scanning table sequentially */
+
+		if (scan->rs_cblock == InvalidBlockNumber)
+		{
+			Assert(!scan->rs_inited);
+			blockno = scan->rs_startblock;
+		}
+		else
+		{
+			Assert(scan->rs_inited);
+
+			blockno = scan->rs_cblock + 1;
+
+			if (blockno >= scan->rs_nblocks)
+			{
+				/* wrap to begining of rel, might not have started at 0 */
+				blockno = 0;
+			}
+
+			/*
+			 * Report our new scan position for synchronization purposes.
+			 *
+			 * Note: we do this before checking for end of scan so that the
+			 * final state of the position hint is back at the start of the
+			 * rel.  That's not strictly necessary, but otherwise when you run
+			 * the same query multiple times the starting position would shift
+			 * a little bit backwards on every invocation, which is confusing.
+			 * We don't guarantee any specific ordering in general, though.
+			 */
+			if (scan->rs_scan.rs_syncscan)
+				ss_report_location(scan->rs_scan.rs_rd, blockno);
+
+			if (blockno == scan->rs_startblock)
+			{
+				blockno = InvalidBlockNumber;
+			}
+		}
+	}
+
+	if (!BlockNumberIsValid(blockno))
+	{
+		if (BufferIsValid(scan->rs_cbuf))
+			ReleaseBuffer(scan->rs_cbuf);
+		scan->rs_cbuf = InvalidBuffer;
+		scan->rs_cblock = InvalidBlockNumber;
+		scan->rs_inited = false;
+
+		return false;
+	}
+
+	heapgetpage(sscan, blockno);
+	scan->rs_inited = true;
+
+	return true;
+}
+
+static bool
+heapam_scan_sample_next_tuple(TableScanDesc sscan, struct SampleScanState *scanstate, TupleTableSlot *slot)
+{
+	HeapScanDesc scan = (HeapScanDesc) sscan;
+	TsmRoutine *tsm = scanstate->tsmroutine;
+	BlockNumber blockno = scan->rs_cblock;
+	bool		pagemode = scan->rs_scan.rs_pageatatime;
+
+	Page		page;
+	bool		all_visible;
+	OffsetNumber maxoffset;
+
+	ExecClearTuple(slot);
+
+	/*
+	 * When not using pagemode, we must lock the buffer during tuple
+	 * visibility checks.
+	 */
+	if (!pagemode)
+		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
+
+	page = (Page) BufferGetPage(scan->rs_cbuf);
+	all_visible = PageIsAllVisible(page) && !scan->rs_scan.rs_snapshot->takenDuringRecovery;
+	maxoffset = PageGetMaxOffsetNumber(page);
+
+	for (;;)
+	{
+		OffsetNumber tupoffset;
+
+		CHECK_FOR_INTERRUPTS();
+
+		/* Ask the tablesample method which tuples to check on this page. */
+		tupoffset = tsm->NextSampleTuple(scanstate,
+										 blockno,
+										 maxoffset);
+
+		if (OffsetNumberIsValid(tupoffset))
+		{
+			ItemId		itemid;
+			bool		visible;
+			HeapTuple	tuple = &(scan->rs_ctup);
+
+			/* Skip invalid tuple pointers. */
+			itemid = PageGetItemId(page, tupoffset);
+			if (!ItemIdIsNormal(itemid))
+				continue;
+
+			tuple->t_data = (HeapTupleHeader) PageGetItem(page, itemid);
+			tuple->t_len = ItemIdGetLength(itemid);
+			ItemPointerSet(&(tuple->t_self), blockno, tupoffset);
+
+
+			if (all_visible)
+				visible = true;
+			else
+				visible = SampleHeapTupleVisible(scan, scan->rs_cbuf, tuple, tupoffset);
+
+			/* in pagemode, heapgetpage did this for us */
+			if (!pagemode)
+				CheckForSerializableConflictOut(visible, scan->rs_scan.rs_rd, tuple,
+												scan->rs_cbuf, scan->rs_scan.rs_snapshot);
+
+			/* Try next tuple from same page. */
+			if (!visible)
+				continue;
+
+			/* Found visible tuple, return it. */
+			if (!pagemode)
+				LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
+
+			ExecStoreBufferHeapTuple(tuple, slot, scan->rs_cbuf);
+
+			/* Count successfully-fetched tuples as heap fetches */
+			pgstat_count_heap_getnext(scan->rs_scan.rs_rd);
+
+			return true;
+		}
+		else
+		{
+			/*
+			 * If we get here, it means we've exhausted the items on this page
+			 * and it's time to move to the next.
+			 */
+			if (!pagemode)
+				LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
+
+			break;
+		}
+	}
+
+	return false;
+}
+
+/*
  * Reconstruct and rewrite the given tuple
  *
  * We cannot simply copy the tuple as-is, for several reasons:
@@ -1983,6 +2197,9 @@ static const TableAmRoutine heapam_methods = {
 	.index_validate_scan = heapam_index_validate_scan,
 
 	.relation_estimate_size = heapam_estimate_rel_size,
+
+	.scan_sample_next_block = heapam_scan_sample_next_block,
+	.scan_sample_next_tuple = heapam_scan_sample_next_tuple
 };
 
 
