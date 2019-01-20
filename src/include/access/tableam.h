@@ -230,6 +230,15 @@ typedef struct TableAmRoutine
 										IndexInfo *index_info,
 										Snapshot snapshot,
 										struct ValidateIndexState *state);
+
+
+	/* ------------------------------------------------------------------------
+	 * Planner related functions.
+	 * ------------------------------------------------------------------------
+	 */
+
+	void		(*relation_estimate_size) (Relation rel, int32 *attr_widths,
+										   BlockNumber *pages, double *tuples, double *allvisfrac);
 } TableAmRoutine;
 
 
@@ -684,6 +693,20 @@ table_index_build_range_scan(Relation heap_rel,
 														callback,
 														callback_state,
 														scan);
+}
+
+
+/* ----------------------------------------------------------------------------
+ * Planner related functionality
+ * ----------------------------------------------------------------------------
+ */
+
+static inline void
+table_estimate_size(Relation rel, int32 *attr_widths,
+					BlockNumber *pages, double *tuples, double *allvisfrac)
+{
+	rel->rd_tableam->relation_estimate_size(rel, attr_widths,
+											pages, tuples, allvisfrac);
 }
 
 
