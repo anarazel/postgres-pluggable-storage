@@ -157,6 +157,18 @@ typedef struct TableAmRoutine
 							   LockWaitPolicy wait_policy,
 							   uint8 flags,
 							   HeapUpdateFailureData *hufd);
+
+	/*
+	 * Perform operations necessary to complete insertions made via
+	 * tuple_insert and multi_insert with a BulkInsertState specified. This
+	 * e.g. may e.g. used to flush the relation when inserting with skipping
+	 * WAL.
+	 *
+	 * May be NULL.
+	 */
+	void		(*finish_bulk_insert) (Relation rel, int options);
+
+
 	/* ------------------------------------------------------------------------
 	 * Non-modifying operations on individual tuples.
 	 * ------------------------------------------------------------------------
@@ -445,6 +457,16 @@ table_lock_tuple(Relation rel, ItemPointer tid, Snapshot snapshot,
 									   cid, mode, wait_policy,
 									   flags, hufd);
 }
+
+static inline void
+table_finish_bulk_insert(Relation rel, int options)
+{
+	/* optional */
+	if (rel->rd_tableam && rel->rd_tableam->finish_bulk_insert)
+		rel->rd_tableam->finish_bulk_insert(rel, options);
+}
+
+
 /* ----------------------------------------------------------------------------
  * Non-modifying operations on individual tuples.
  * ----------------------------------------------------------------------------

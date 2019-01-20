@@ -3098,12 +3098,7 @@ CopyFrom(CopyState cstate)
 
 	FreeExecutorState(estate);
 
-	/*
-	 * If we skipped writing WAL, then we need to sync the heap (but not
-	 * indexes since those use WAL anyway)
-	 */
-	if (hi_options & HEAP_INSERT_SKIP_WAL)
-		heap_sync(cstate->rel);
+	table_finish_bulk_insert(cstate->rel, hi_options);
 
 	return processed;
 }

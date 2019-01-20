@@ -426,6 +426,18 @@ retry:
 	return result;
 }
 
+static void
+heapam_finish_bulk_insert(Relation relation, int options)
+{
+	/*
+	 * If we skipped writing WAL, then we need to sync the heap (but not
+	 * indexes since those use WAL anyway)
+	 */
+	if (options & HEAP_INSERT_SKIP_WAL)
+		heap_sync(relation);
+}
+
+
 static bool
 heapam_fetch_row_version(Relation relation,
 						 ItemPointer tid,
@@ -563,6 +575,7 @@ static const TableAmRoutine heapam_methods = {
 	.tuple_update = heapam_heap_update,
 	.multi_insert = heap_multi_insert,
 	.tuple_lock = heapam_lock_tuple,
+	.finish_bulk_insert = heapam_finish_bulk_insert,
 
 	.tuple_fetch_row_version = heapam_fetch_row_version,
 	.tuple_get_latest_tid = heap_get_latest_tid,

@@ -28,6 +28,7 @@
 #include "access/reloptions.h"
 #include "access/htup_details.h"
 #include "access/sysattr.h"
+#include "access/tableam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/namespace.h"
@@ -601,9 +602,7 @@ intorel_shutdown(DestReceiver *self)
 
 	FreeBulkInsertState(myState->bistate);
 
-	/* If we skipped using WAL, must heap_sync before commit */
-	if (myState->hi_options & HEAP_INSERT_SKIP_WAL)
-		heap_sync(myState->rel);
+	table_finish_bulk_insert(myState->rel, myState->hi_options);
 
 	/* close rel, but keep lock until commit */
 	table_close(myState->rel, NoLock);
