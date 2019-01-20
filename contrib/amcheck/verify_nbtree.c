@@ -26,6 +26,7 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
+#include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "catalog/index.h"
@@ -481,7 +482,7 @@ bt_check_every_level(Relation rel, Relation heaprel, bool readonly,
 	if (state->heapallindexed)
 	{
 		IndexInfo  *indexinfo = BuildIndexInfo(state->rel);
-		HeapScanDesc scan;
+		TableScanDesc scan;
 
 		/* Report on extra downlink checks performed in readonly case */
 		if (state->readonly)
@@ -500,7 +501,7 @@ bt_check_every_level(Relation rel, Relation heaprel, bool readonly,
 		 *
 		 * Note that IndexBuildHeapScan() calls heap_endscan() for us.
 		 */
-		scan = heap_beginscan_strat(state->heaprel, /* relation */
+		scan = table_beginscan_strat(state->heaprel, /* relation */
 									snapshot,	/* snapshot */
 									0,	/* number of keys */
 									NULL,	/* scan key */

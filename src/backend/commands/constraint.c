@@ -15,6 +15,7 @@
 
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/tableam.h"
 #include "catalog/index.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"

@@ -21,29 +21,14 @@
 #include "storage/spin.h"
 #include "utils/relcache.h"
 
-/*
- * Shared state for parallel heap scan.
- *
- * Each backend participating in a parallel heap scan has its own
- * HeapScanDesc in backend-private memory, and those objects all contain
- * a pointer to this structure.  The information here must be sufficient
- * to properly initialize each new HeapScanDesc as workers join the scan,
- * and it must act as a font of block numbers for those workers.
- */
-typedef struct ParallelHeapScanDescData
-{
-	Oid			phs_relid;		/* OID of relation to scan */
-	bool		phs_syncscan;	/* report location to syncscan logic? */
-	BlockNumber phs_nblocks;	/* # blocks in relation at start of scan */
-	slock_t		phs_mutex;		/* mutual exclusion for setting startblock */
-	BlockNumber phs_startblock; /* starting block number */
-	pg_atomic_uint64 phs_nallocated;	/* number of blocks allocated to
-										 * workers so far. */
-	bool		phs_snapshot_any;	/* SnapshotAny, not phs_snapshot_data? */
-	char		phs_snapshot_data[FLEXIBLE_ARRAY_MEMBER];
-} ParallelHeapScanDescData;
 
-typedef struct HeapScanDescData
+struct ParallelTableScanDescData;
+
+/*
+ * Generic descriptor for table scans. This is the base-class for table scans,
+ * which needs to be embedded in the scans of individual AMs.
+ */
+typedef struct TableScanDescData
 {
 	/* scan parameters */
 	Relation	rs_rd;			/* heap relation descriptor */
@@ -56,28 +41,55 @@ typedef struct HeapScanDescData
 	bool		rs_allow_strat; /* allow or disallow use of access strategy */
 	bool		rs_allow_sync;	/* allow or disallow use of syncscan */
 	bool		rs_temp_snap;	/* unregister snapshot at scan end? */
-
-	/* state set up at initscan time */
-	BlockNumber rs_nblocks;		/* total number of blocks in rel */
-	BlockNumber rs_startblock;	/* block # to start at */
-	BlockNumber rs_numblocks;	/* max number of blocks to scan */
-	/* rs_numblocks is usually InvalidBlockNumber, meaning "scan whole rel" */
-	BufferAccessStrategy rs_strategy;	/* access strategy for reads */
 	bool		rs_syncscan;	/* report location to syncscan logic? */
 
-	/* scan current state */
-	bool		rs_inited;		/* false = scan not init'd yet */
-	HeapTupleData rs_ctup;		/* current tuple in scan, if any */
-	BlockNumber rs_cblock;		/* current block # in scan, if any */
-	Buffer		rs_cbuf;		/* current buffer in scan, if any */
-	/* NB: if rs_cbuf is not InvalidBuffer, we hold a pin on that buffer */
-	struct ParallelHeapScanDescData *rs_parallel;	/* parallel scan information */
+	struct ParallelTableScanDescData *rs_parallel;	/* parallel scan information */
 
-	/* these fields only used in page-at-a-time mode and for bitmap scans */
-	int			rs_cindex;		/* current tuple's index in vistuples */
-	int			rs_ntuples;		/* number of visible tuples on page */
-	OffsetNumber rs_vistuples[MaxHeapTuplesPerPage];	/* their offsets */
-}			HeapScanDescData;
+}			TableScanDescData;
+typedef struct TableScanDescData *TableScanDesc;
+
+/*
+ * Shared state for parallel table scan.
+ *
+ * Each backend participating in a parallel table scan has its own
+ * TableScanDesc in backend-private memory, and those objects all contain a
+ * pointer to this structure.  The information here must be sufficient to
+ * properly initialize each new TableScanDesc as workers join the scan, and it
+ * must act as a font of block numbers for those workers.
+ */
+typedef struct ParallelTableScanDescData
+{
+	Oid			phs_relid;		/* OID of relation to scan */
+	bool		phs_syncscan;	/* report location to syncscan logic? */
+	bool		phs_snapshot_any;	/* SnapshotAny, not phs_snapshot_data? */
+	Size		phs_snapshot_off;	/* data for snapshot */
+} ParallelTableScanDescData;
+typedef struct ParallelTableScanDescData *ParallelTableScanDesc;
+
+/*
+ * Shared state for parallel table scans, for block oriented storage.
+ */
+typedef struct ParallelBlockTableScanDescData
+{
+	ParallelTableScanDescData base;
+
+	BlockNumber phs_nblocks;	/* # blocks in relation at start of scan */
+	slock_t		phs_mutex;		/* mutual exclusion for setting startblock */
+	BlockNumber phs_startblock; /* starting block number */
+	pg_atomic_uint64 phs_nallocated;	/* number of blocks allocated to
+										 * workers so far. */
+} ParallelBlockTableScanDescData;
+typedef struct ParallelBlockTableScanDescData *ParallelBlockTableScanDesc;
+
+/*
+ * Base class for fetches from a table via an index. This is the base-class
+ * for such scans, which needs to be embedded in the respective struct for
+ * individual AMs.
+ */
+typedef struct IndexFetchTableData
+{
+	Relation rel;
+} IndexFetchTableData;
 
 /*
  * We use the same IndexScanDescData structure for both amgettuple-based
@@ -117,10 +129,10 @@ typedef struct IndexScanDescData
 	HeapTuple	xs_hitup;		/* index data returned by AM, as HeapTuple */
 	struct TupleDescData *xs_hitupdesc;	/* rowtype descriptor of xs_hitup */
 
-	/* xs_ctup/xs_cbuf/xs_recheck are valid after a successful index_getnext */
-	HeapTupleData xs_ctup;		/* current heap tuple, if any */
-	Buffer		xs_cbuf;		/* current heap buffer in scan, if any */
-	/* NB: if xs_cbuf is not InvalidBuffer, we hold a pin on that buffer */
+	ItemPointerData xs_heaptid; /* result */
+	bool		xs_heap_continue;	/* T if must keep walking, potential further results */
+	IndexFetchTableData *xs_heapfetch;
+
 	bool		xs_recheck;		/* T means scan keys must be rechecked */
 
 	/*
@@ -133,9 +145,6 @@ typedef struct IndexScanDescData
 	Datum	   *xs_orderbyvals;
 	bool	   *xs_orderbynulls;
 	bool		xs_recheckorderby;
-
-	/* state data for traversing HOT chains in index_getnext */
-	bool		xs_continue_hot;	/* T if must keep walking HOT chain */
 
 	/* parallel index scan information, in shared memory */
 	struct ParallelIndexScanDescData *parallel_scan;
@@ -150,14 +159,17 @@ typedef struct ParallelIndexScanDescData
 	char		ps_snapshot_data[FLEXIBLE_ARRAY_MEMBER];
 }			ParallelIndexScanDescData;
 
-/* Struct for heap-or-index scans of system tables */
+struct TupleTableSlot;
+
+/* Struct for storage-or-index scans of system tables */
 typedef struct SysScanDescData
 {
 	Relation	heap_rel;		/* catalog being scanned */
 	Relation	irel;			/* NULL if doing heap scan */
-	struct HeapScanDescData *scan;			/* only valid in heap-scan case */
+	struct TableScanDescData *scan;		/* only valid in storage-scan case */
 	struct IndexScanDescData *iscan;		/* only valid in index-scan case */
 	struct SnapshotData *snapshot;		/* snapshot to unregister at end of scan */
+	struct TupleTableSlot *slot;
 }			SysScanDescData;
 
 #endif							/* RELSCAN_H */

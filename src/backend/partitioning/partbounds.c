@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "access/heapam.h"
+#include "access/tableam.h"
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_type.h"
@@ -1207,7 +1208,7 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 		Snapshot	snapshot;
 		TupleDesc	tupdesc;
 		ExprContext *econtext;
-		HeapScanDesc scan;
+		TableScanDesc scan;
 		MemoryContext oldCxt;
 		TupleTableSlot *tupslot;
 
@@ -1266,8 +1267,8 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 
 		econtext = GetPerTupleExprContext(estate);
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		scan = heap_beginscan(part_rel, snapshot, 0, NULL);
 		tupslot = MakeSingleTupleTableSlot(tupdesc, &TTSOpsHeapTuple);
+		scan = table_beginscan(part_rel, snapshot, 0, NULL);
 
 		/*
 		 * Switch to per-tuple memory context and reset it for each tuple
@@ -1291,7 +1292,7 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 		}
 
 		MemoryContextSwitchTo(oldCxt);
-		heap_endscan(scan);
+		table_endscan(scan);
 		UnregisterSnapshot(snapshot);
 		ExecDropSingleTupleTableSlot(tupslot);
 		FreeExecutorState(estate);

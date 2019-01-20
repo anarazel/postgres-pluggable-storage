@@ -701,7 +701,7 @@ apply_handle_update(StringInfo s)
 										&TTSOpsHeapTuple);
 	localslot = ExecInitExtraTupleSlot(estate,
 									   RelationGetDescr(rel->localrel),
-									   &TTSOpsHeapTuple);
+									   &TTSOpsBufferHeapTuple);
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
 
 	PushActiveSnapshot(GetTransactionSnapshot());
@@ -821,7 +821,7 @@ apply_handle_delete(StringInfo s)
 										&TTSOpsVirtual);
 	localslot = ExecInitExtraTupleSlot(estate,
 									   RelationGetDescr(rel->localrel),
-									   &TTSOpsHeapTuple);
+									   &TTSOpsBufferHeapTuple);
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
 
 	PushActiveSnapshot(GetTransactionSnapshot());

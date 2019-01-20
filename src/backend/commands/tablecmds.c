@@ -4736,8 +4736,8 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		bool	   *isnull;
 		TupleTableSlot *oldslot;
 		TupleTableSlot *newslot;
-		HeapScanDesc scan;
 		HeapTuple	tuple;
+		TableScanDesc scan;
 		MemoryContext oldCxt;
 		List	   *dropped_attrs = NIL;
 		ListCell   *lc;
@@ -4795,7 +4795,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		 * checking all the constraints.
 		 */
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		scan = heap_beginscan(oldrel, snapshot, 0, NULL);
+		scan = table_beginscan(oldrel, snapshot, 0, NULL);
 
 		/*
 		 * Switch to per-tuple memory context and reset it for each tuple
@@ -4911,7 +4911,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		}
 
 		MemoryContextSwitchTo(oldCxt);
-		heap_endscan(scan);
+		table_endscan(scan);
 		UnregisterSnapshot(snapshot);
 
 		ExecDropSingleTupleTableSlot(oldslot);
@@ -5306,7 +5306,7 @@ find_typed_table_dependencies(Oid typeOid, const char *typeName, DropBehavior be
 {
 	Relation	classRel;
 	ScanKeyData key[1];
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	HeapTuple	tuple;
 	List	   *result = NIL;
 
@@ -5317,7 +5317,7 @@ find_typed_table_dependencies(Oid typeOid, const char *typeName, DropBehavior be
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(typeOid));
 
-	scan = heap_beginscan_catalog(classRel, 1, key);
+	scan = table_beginscan_catalog(classRel, 1, key);
 
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
@@ -5333,7 +5333,7 @@ find_typed_table_dependencies(Oid typeOid, const char *typeName, DropBehavior be
 			result = lappend_oid(result, classform->oid);
 	}
 
-	heap_endscan(scan);
+	table_endscan(scan);
 	table_close(classRel, AccessShareLock);
 
 	return result;
@@ -8819,8 +8819,8 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	Expr	   *origexpr;
 	ExprState  *exprstate;
 	TupleDesc	tupdesc;
-	HeapScanDesc scan;
 	HeapTuple	tuple;
+	TableScanDesc scan;
 	ExprContext *econtext;
 	MemoryContext oldcxt;
 	TupleTableSlot *slot;
@@ -8860,7 +8860,7 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	econtext->ecxt_scantuple = slot;
 
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
-	scan = heap_beginscan(rel, snapshot, 0, NULL);
+	scan = table_beginscan(rel, snapshot, 0, NULL);
 
 	/*
 	 * Switch to per-tuple memory context and reset it for each tuple
@@ -8883,7 +8883,7 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	}
 
 	MemoryContextSwitchTo(oldcxt);
-	heap_endscan(scan);
+	table_endscan(scan);
 	UnregisterSnapshot(snapshot);
 	ExecDropSingleTupleTableSlot(slot);
 	FreeExecutorState(estate);
@@ -8902,8 +8902,8 @@ validateForeignKeyConstraint(char *conname,
 							 Oid pkindOid,
 							 Oid constraintOid)
 {
-	HeapScanDesc scan;
 	HeapTuple	tuple;
+	TableScanDesc scan;
 	Trigger		trig;
 	Snapshot	snapshot;
 
@@ -8938,7 +8938,7 @@ validateForeignKeyConstraint(char *conname,
 	 * ereport(ERROR) and that's that.
 	 */
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
-	scan = heap_beginscan(rel, snapshot, 0, NULL);
+	scan = table_beginscan(rel, snapshot, 0, NULL);
 
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
@@ -8967,7 +8967,7 @@ validateForeignKeyConstraint(char *conname,
 		RI_FKey_check_ins(fcinfo);
 	}
 
-	heap_endscan(scan);
+	table_endscan(scan);
 	UnregisterSnapshot(snapshot);
 }
 
@@ -11593,7 +11593,7 @@ AlterTableMoveAll(AlterTableMoveAllStmt *stmt)
 	ListCell   *l;
 	ScanKeyData key[1];
 	Relation	rel;
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	HeapTuple	tuple;
 	Oid			orig_tablespaceoid;
 	Oid			new_tablespaceoid;
@@ -11658,7 +11658,7 @@ AlterTableMoveAll(AlterTableMoveAllStmt *stmt)
 				ObjectIdGetDatum(orig_tablespaceoid));
 
 	rel = table_open(RelationRelationId, AccessShareLock);
-	scan = heap_beginscan_catalog(rel, 1, key);
+	scan = table_beginscan_catalog(rel, 1, key);
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
@@ -11717,7 +11717,7 @@ AlterTableMoveAll(AlterTableMoveAllStmt *stmt)
 		relations = lappend_oid(relations, relOid);
 	}
 
-	heap_endscan(scan);
+	table_endscan(scan);
 	table_close(rel, AccessShareLock);
 
 	if (relations == NIL)

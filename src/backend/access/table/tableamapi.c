@@ -97,7 +97,7 @@ get_table_am_oid(const char *tableamname, bool missing_ok)
 {
 	Oid			result;
 	Relation	rel;
-	HeapScanDesc scandesc;
+	TableScanDesc scandesc;
 	HeapTuple	tuple;
 	ScanKeyData entry[1];
 
@@ -112,7 +112,7 @@ get_table_am_oid(const char *tableamname, bool missing_ok)
 				Anum_pg_am_amname,
 				BTEqualStrategyNumber, F_NAMEEQ,
 				CStringGetDatum(tableamname));
-	scandesc = heap_beginscan_catalog(rel, 1, entry);
+	scandesc = table_beginscan_catalog(rel, 1, entry);
 	tuple = heap_getnext(scandesc, ForwardScanDirection);
 
 	/* We assume that there can be at most one matching tuple */
@@ -122,7 +122,7 @@ get_table_am_oid(const char *tableamname, bool missing_ok)
 	else
 		result = InvalidOid;
 
-	heap_endscan(scandesc);
+	table_endscan(scandesc);
 	heap_close(rel, AccessShareLock);
 
 	if (!OidIsValid(result) && !missing_ok)

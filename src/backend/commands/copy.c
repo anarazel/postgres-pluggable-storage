@@ -20,6 +20,7 @@
 
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/tableam.h"
 #include "access/sysattr.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -2073,13 +2074,13 @@ CopyTo(CopyState cstate)
 	{
 		Datum	   *values;
 		bool	   *nulls;
-		HeapScanDesc scandesc;
 		HeapTuple	tuple;
+		TableScanDesc scandesc;
 
 		values = (Datum *) palloc(num_phys_attrs * sizeof(Datum));
 		nulls = (bool *) palloc(num_phys_attrs * sizeof(bool));
 
-		scandesc = heap_beginscan(cstate->rel, GetActiveSnapshot(), 0, NULL);
+		scandesc = table_beginscan(cstate->rel, GetActiveSnapshot(), 0, NULL);
 
 		processed = 0;
 		while ((tuple = heap_getnext(scandesc, ForwardScanDirection)) != NULL)
@@ -2094,10 +2095,10 @@ CopyTo(CopyState cstate)
 			processed++;
 		}
 
-		heap_endscan(scandesc);
 
 		pfree(values);
 		pfree(nulls);
+		table_endscan(scandesc);
 	}
 	else
 	{

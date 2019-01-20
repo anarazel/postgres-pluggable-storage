@@ -119,7 +119,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	 */
 	while ((tid = index_getnext_tid(scandesc, direction)) != NULL)
 	{
-		HeapTuple	tuple = NULL;
+		bool		tuple_from_heap = false;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -165,9 +165,10 @@ IndexOnlyNext(IndexOnlyScanState *node)
 			 * Rats, we have to visit the heap to check visibility.
 			 */
 			InstrCountTuples2(node, 1);
-			tuple = index_fetch_heap(scandesc);
-			if (tuple == NULL)
+			if (!index_fetch_heap(scandesc, slot))
 				continue;		/* no visible tuple, try next index entry */
+
+			ExecClearTuple(slot);
 
 			/*
 			 * Only MVCC snapshots are supported here, so there should be no
@@ -175,7 +176,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 			 * been found.  If we did want to allow that, we'd need to keep
 			 * more state to remember not to call index_getnext_tid next time.
 			 */
-			if (scandesc->xs_continue_hot)
+			if (scandesc->xs_heap_continue)
 				elog(ERROR, "non-MVCC snapshots are not supported in index-only scans");
 
 			/*
@@ -184,13 +185,15 @@ IndexOnlyNext(IndexOnlyScanState *node)
 			 * but it's not clear whether it's a win to do so.  The next index
 			 * entry might require a visit to the same heap page.
 			 */
+
+			tuple_from_heap = true;
 		}
 
 		/*
 		 * Fill the scan tuple slot with data from the index.  This might be
-		 * provided in either HeapTuple or IndexTuple format.  Conceivably an
-		 * index AM might fill both fields, in which case we prefer the heap
-		 * format, since it's probably a bit cheaper to fill a slot from.
+		 * provided in either HeapTuple or IndexTuple format.  Conceivably
+		 * an index AM might fill both fields, in which case we prefer the
+		 * heap format, since it's probably a bit cheaper to fill a slot from.
 		 */
 		if (scandesc->xs_hitup)
 		{
@@ -201,7 +204,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 			 */
 			Assert(slot->tts_tupleDescriptor->natts ==
 				   scandesc->xs_hitupdesc->natts);
-			ExecStoreHeapTuple(scandesc->xs_hitup, slot, false);
+			ExecForceStoreHeapTuple(scandesc->xs_hitup, slot);
 		}
 		else if (scandesc->xs_itup)
 			StoreIndexTuple(slot, scandesc->xs_itup, scandesc->xs_itupdesc);
@@ -244,7 +247,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * anyway, then we already have the tuple-level lock and can skip the
 		 * page lock.
 		 */
-		if (tuple == NULL)
+		if (!tuple_from_heap)
 			PredicateLockPage(scandesc->heapRelation,
 							  ItemPointerGetBlockNumber(tid),
 							  estate->es_snapshot);
@@ -523,7 +526,8 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 	 * suitable data anyway.)
 	 */
 	tupDesc = ExecTypeFromTL(node->indextlist);
-	ExecInitScanTupleSlot(estate, &indexstate->ss, tupDesc, &TTSOpsHeapTuple);
+	ExecInitScanTupleSlot(estate, &indexstate->ss, tupDesc,
+						  &TTSOpsBufferHeapTuple);
 
 	/*
 	 * Initialize result type and projection info.  The node's targetlist will

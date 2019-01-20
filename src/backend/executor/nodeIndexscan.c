@@ -31,6 +31,7 @@
 
 #include "access/nbtree.h"
 #include "access/relscan.h"
+#include "access/tableam.h"
 #include "catalog/pg_am.h"
 #include "executor/execdebug.h"
 #include "executor/nodeIndexscan.h"
@@ -83,7 +84,6 @@ IndexNext(IndexScanState *node)
 	ExprContext *econtext;
 	ScanDirection direction;
 	IndexScanDesc scandesc;
-	HeapTuple	tuple;
 	TupleTableSlot *slot;
 
 	/*
@@ -130,19 +130,9 @@ IndexNext(IndexScanState *node)
 	/*
 	 * ok, now that we have what we need, fetch the next tuple.
 	 */
-	while ((tuple = index_getnext(scandesc, direction)) != NULL)
+	while (index_getnext_slot(scandesc, direction, slot))
 	{
 		CHECK_FOR_INTERRUPTS();
-
-		/*
-		 * Store the scanned tuple in the scan tuple slot of the scan state.
-		 * Note: we pass 'false' because tuples returned by amgetnext are
-		 * pointers onto disk pages and must not be pfree()'d.
-		 */
-		ExecStoreBufferHeapTuple(tuple, /* tuple to store */
-								 slot,	/* slot to store in */
-								 scandesc->xs_cbuf);	/* buffer containing
-														 * tuple */
 
 		/*
 		 * If the index was lossy, we have to recheck the index quals using
@@ -271,8 +261,7 @@ IndexNextWithReorder(IndexScanState *node)
 		 */
 next_indextuple:
 		slot = node->ss.ss_ScanTupleSlot;
-		tuple = index_getnext(scandesc, ForwardScanDirection);
-		if (!tuple)
+		if (!index_getnext_slot(scandesc, ForwardScanDirection, slot))
 		{
 			/*
 			 * No more tuples from the index.  But we still need to drain any
@@ -281,14 +270,6 @@ next_indextuple:
 			node->iss_ReachedEnd = true;
 			continue;
 		}
-
-		/*
-		 * Store the scanned tuple in the scan tuple slot of the scan state.
-		 */
-		ExecStoreBufferHeapTuple(tuple, /* tuple to store */
-								 slot,	/* slot to store in */
-								 scandesc->xs_cbuf);	/* buffer containing
-														 * tuple */
 
 		/*
 		 * If the index was lossy, we have to recheck the index quals and
@@ -357,6 +338,8 @@ next_indextuple:
 													  topmost->orderbynulls,
 													  node) > 0))
 		{
+			HeapTuple tuple = ExecFetchSlotHeapTuple(slot, true, NULL);
+
 			/* Put this tuple to the queue */
 			reorderqueue_push(node, tuple, lastfetched_vals, lastfetched_nulls);
 			continue;

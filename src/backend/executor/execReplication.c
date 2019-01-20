@@ -17,6 +17,7 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/relscan.h"
+#include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "commands/trigger.h"
@@ -118,7 +119,6 @@ RelationFindReplTupleByIndex(Relation rel, Oid idxoid,
 							 TupleTableSlot *searchslot,
 							 TupleTableSlot *outslot)
 {
-	HeapTuple	scantuple;
 	ScanKeyData skey[INDEX_MAX_KEYS];
 	IndexScanDesc scan;
 	SnapshotData snap;
@@ -144,10 +144,9 @@ retry:
 	index_rescan(scan, skey, IndexRelationGetNumberOfKeyAttributes(idxrel), NULL, 0);
 
 	/* Try to find the tuple */
-	if ((scantuple = index_getnext(scan, ForwardScanDirection)) != NULL)
+	if (index_getnext_slot(scan, ForwardScanDirection, outslot))
 	{
 		found = true;
-		ExecStoreHeapTuple(scantuple, outslot, false);
 		ExecMaterializeSlot(outslot);
 
 		xwait = TransactionIdIsValid(snap.xmin) ?
@@ -285,7 +284,7 @@ RelationFindReplTupleSeq(Relation rel, LockTupleMode lockmode,
 						 TupleTableSlot *searchslot, TupleTableSlot *outslot)
 {
 	HeapTuple	scantuple;
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	SnapshotData snap;
 	TransactionId xwait;
 	bool		found;
@@ -295,21 +294,23 @@ RelationFindReplTupleSeq(Relation rel, LockTupleMode lockmode,
 
 	/* Start a heap scan. */
 	InitDirtySnapshot(snap);
-	scan = heap_beginscan(rel, &snap, 0, NULL);
+	scan = table_beginscan(rel, &snap, 0, NULL);
 
 retry:
 	found = false;
 
-	heap_rescan(scan, NULL);
+	table_rescan(scan, NULL);
 
 	/* Try to find the tuple */
 	while ((scantuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
+		HeapScanDesc hscan = (HeapScanDesc) scan;
+
 		if (!tuple_equals_slot(desc, scantuple, searchslot))
 			continue;
 
 		found = true;
-		ExecStoreHeapTuple(scantuple, outslot, false);
+		ExecStoreBufferHeapTuple(scantuple, outslot, hscan->rs_cbuf);
 		ExecMaterializeSlot(outslot);
 
 		xwait = TransactionIdIsValid(snap.xmin) ?
@@ -375,7 +376,7 @@ retry:
 		}
 	}
 
-	heap_endscan(scan);
+	table_endscan(scan);
 
 	return found;
 }
