@@ -27,6 +27,7 @@
 #include "access/heapam.h"
 #include "access/reloptions.h"
 #include "access/htup_details.h"
+#include "access/tableam.h"
 #include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/xact.h"
@@ -61,7 +62,8 @@ typedef struct
 	ObjectAddress reladdr;		/* address of rel, for ExecCreateTableAs */
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	int			hi_options;		/* heap_insert performance options */
-	BulkInsertState bistate;	/* bulk insert state */
+	BulkInsertState bistate;		/* bulk insert state */
+	TupleTableSlot *slot;
 } DR_intorel;
 
 /* utility functions for CTAS definition creation */
@@ -553,6 +555,7 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	myState->rel = intoRelationDesc;
 	myState->reladdr = intoRelationAddr;
 	myState->output_cid = GetCurrentCommandId(true);
+	myState->slot = table_gimmegimmeslot(intoRelationDesc, NULL);
 
 	/*
 	 * We can skip WAL-logging the insertions, unless PITR or streaming
@@ -573,19 +576,21 @@ static bool
 intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
-	HeapTuple	tuple;
 
 	/*
-	 * get the heap tuple out of the tuple table slot, making sure we have a
-	 * writable copy
+	 * Ensure input tuple is the right format for the target relation.
 	 */
-	tuple = ExecCopySlotHeapTuple(slot);
+	if (slot->tts_ops != myState->slot->tts_ops)
+	{
+		ExecCopySlot(myState->slot, slot);
+		slot = myState->slot;
+	}
 
-	heap_insert(myState->rel,
-				tuple,
-				myState->output_cid,
-				myState->hi_options,
-				myState->bistate);
+	table_insert(myState->rel,
+				 slot,
+				 myState->output_cid,
+				 myState->hi_options,
+				 myState->bistate);
 
 	/* We know this is a newly created relation, so there are no indexes */
 
@@ -600,6 +605,7 @@ intorel_shutdown(DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
 
+	ExecDropSingleTupleTableSlot(myState->slot);
 	FreeBulkInsertState(myState->bistate);
 
 	table_finish_bulk_insert(myState->rel, myState->hi_options);

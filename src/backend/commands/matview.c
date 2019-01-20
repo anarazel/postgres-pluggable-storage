@@ -56,6 +56,7 @@ typedef struct
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	int			hi_options;		/* heap_insert performance options */
 	BulkInsertState bistate;	/* bulk insert state */
+	TupleTableSlot *slot;
 } DR_transientrel;
 
 static int	matview_maintenance_depth = 0;
@@ -457,6 +458,7 @@ transientrel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 */
 	myState->transientrel = transientrel;
 	myState->output_cid = GetCurrentCommandId(true);
+	myState->slot = table_gimmegimmeslot(transientrel, NULL);
 
 	/*
 	 * We can skip WAL-logging the insertions, unless PITR or streaming
@@ -478,24 +480,23 @@ static bool
 transientrel_receive(TupleTableSlot *slot, DestReceiver *self)
 {
 	DR_transientrel *myState = (DR_transientrel *) self;
-	HeapTuple	tuple;
 
 	/*
-	 * get the heap tuple out of the tuple table slot, making sure we have a
-	 * writable copy
+	 * Ensure input tuple is the right format for the target relation.
 	 */
-	tuple = ExecCopySlotHeapTuple(slot);
+	if (slot->tts_ops != myState->slot->tts_ops)
+	{
+		ExecCopySlot(myState->slot, slot);
+		slot = myState->slot;
+	}
 
-	heap_insert(myState->transientrel,
-				tuple,
-				myState->output_cid,
-				myState->hi_options,
-				myState->bistate);
+	table_insert(myState->transientrel,
+				 slot,
+				 myState->output_cid,
+				 myState->hi_options,
+				 myState->bistate);
 
 	/* We know this is a newly created relation, so there are no indexes */
-
-	/* Free the copied tuple. */
-	heap_freetuple(tuple);
 
 	return true;
 }
@@ -508,6 +509,7 @@ transientrel_shutdown(DestReceiver *self)
 {
 	DR_transientrel *myState = (DR_transientrel *) self;
 
+	ExecDropSingleTupleTableSlot(myState->slot);
 	FreeBulkInsertState(myState->bistate);
 
 	table_finish_bulk_insert(myState->transientrel, myState->hi_options);
