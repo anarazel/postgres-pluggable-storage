@@ -464,6 +464,11 @@ table_fetch_follow(struct IndexFetchTableData *scan,
 													 all_dead);
 }
 
+extern bool table_fetch_follow_check(Relation rel,
+									 ItemPointer tid,
+									 Snapshot snapshot,
+									 bool *all_dead);
+
 /*
  * Return true iff tuple in slot satisfies the snapshot.
  *

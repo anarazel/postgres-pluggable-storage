@@ -152,6 +152,25 @@ table_beginscan_catalog(Relation relation, int nkeys, struct ScanKeyData *key)
 											true, true, true, false, false, true);
 }
 
+bool
+table_fetch_follow_check(Relation rel,
+						 ItemPointer tid,
+						 Snapshot snapshot,
+						 bool *all_dead)
+{
+	IndexFetchTableData *scan = table_begin_index_fetch_table(rel);
+	TupleTableSlot *slot = table_gimmegimmeslot(rel, NULL);
+	bool		call_again = false;
+	bool		found;
+
+	found = table_fetch_follow(scan, tid, snapshot, slot, &call_again, all_dead);
+
+	table_end_index_fetch_table(scan);
+	ExecDropSingleTupleTableSlot(slot);
+
+	return found;
+}
+
 /*
  *	simple_table_update - replace a tuple
  *
