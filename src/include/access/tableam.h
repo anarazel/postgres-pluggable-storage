@@ -27,6 +27,7 @@ extern char *default_table_access_method;
 extern bool synchronize_seqscans;
 
 
+struct ValidateIndexState;
 struct BulkInsertStateData;
 
 /*
@@ -191,6 +192,27 @@ typedef struct TableAmRoutine
 											 TupleTableSlot *slot,
 											 Snapshot snapshot);
 
+
+	/* ------------------------------------------------------------------------
+	 * DDL related functionality.
+	 * ------------------------------------------------------------------------
+	 */
+
+	double		(*index_build_range_scan) (Relation heap_rel,
+										   Relation index_rel,
+										   IndexInfo *index_nfo,
+										   bool allow_sync,
+										   bool anyvisible,
+										   BlockNumber start_blockno,
+										   BlockNumber end_blockno,
+										   IndexBuildCallback callback,
+										   void *callback_state,
+										   TableScanDesc scan);
+	void		(*index_validate_scan) (Relation heap_rel,
+										Relation index_rel,
+										IndexInfo *index_info,
+										Snapshot snapshot,
+										struct ValidateIndexState *state);
 } TableAmRoutine;
 
 
@@ -531,6 +553,65 @@ table_tuple_satisfies_snapshot(Relation rel, TupleTableSlot *slot, Snapshot snap
 }
 
 
+
+static inline double
+table_index_build_scan(Relation heap_rel,
+					   Relation index_rel,
+					   IndexInfo *index_nfo,
+					   bool allow_sync,
+					   IndexBuildCallback callback,
+					   void *callback_state,
+					   TableScanDesc scan)
+{
+	return heap_rel->rd_tableam->index_build_range_scan(heap_rel,
+														index_rel,
+														index_nfo,
+														allow_sync,
+														false,
+														0,
+														InvalidBlockNumber,
+														callback,
+														callback_state,
+														scan);
+}
+
+static inline void
+table_index_validate_scan(Relation heap_rel,
+						  Relation index_rel,
+						  IndexInfo *index_info,
+						  Snapshot snapshot,
+						  struct ValidateIndexState *state)
+{
+	heap_rel->rd_tableam->index_validate_scan(heap_rel,
+											  index_rel,
+											  index_info,
+											  snapshot,
+											  state);
+}
+
+static inline double
+table_index_build_range_scan(Relation heap_rel,
+							 Relation index_rel,
+							 IndexInfo *index_nfo,
+							 bool allow_sync,
+							 bool anyvisible,
+							 BlockNumber start_blockno,
+							 BlockNumber numblocks,
+							 IndexBuildCallback callback,
+							 void *callback_state,
+							 TableScanDesc scan)
+{
+	return heap_rel->rd_tableam->index_build_range_scan(heap_rel,
+														index_rel,
+														index_nfo,
+														allow_sync,
+														anyvisible,
+														start_blockno,
+														numblocks,
+														callback,
+														callback_state,
+														scan);
+}
 
 
 /* ----------------------------------------------------------------------------

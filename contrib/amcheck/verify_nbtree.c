@@ -23,9 +23,9 @@
  */
 #include "postgres.h"
 
-#include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
+#include "access/table.h"
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
@@ -535,8 +535,8 @@ bt_check_every_level(Relation rel, Relation heaprel, bool readonly,
 			 RelationGetRelationName(state->rel),
 			 RelationGetRelationName(state->heaprel));
 
-		IndexBuildHeapScan(state->heaprel, state->rel, indexinfo, true,
-						   bt_tuple_present_callback, (void *) state, scan);
+		table_index_build_scan(state->heaprel, state->rel, indexinfo, true,
+							   bt_tuple_present_callback, (void *) state, scan);
 
 		ereport(DEBUG1,
 				(errmsg_internal("finished verifying presence of " INT64_FORMAT " tuples from table \"%s\" with bitset %.2f%% set",

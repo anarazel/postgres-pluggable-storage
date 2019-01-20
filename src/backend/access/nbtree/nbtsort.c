@@ -471,9 +471,9 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 
 	/* Fill spool using either serial or parallel heap scan */
 	if (!buildstate->btleader)
-		reltuples = IndexBuildHeapScan(heap, index, indexInfo, true,
-									   _bt_build_callback, (void *) buildstate,
-									   NULL);
+		reltuples = table_index_build_scan(heap, index, indexInfo, true,
+										   _bt_build_callback, (void *) buildstate,
+										   NULL);
 	else
 		reltuples = _bt_parallel_heapscan(buildstate,
 										  &indexInfo->ii_BrokenHotChain);
@@ -548,7 +548,7 @@ _bt_leafbuild(BTSpool *btspool, BTSpool *btspool2)
 }
 
 /*
- * Per-tuple callback from IndexBuildHeapScan
+ * Per-tuple callback from table_index_build_scan
  */
 static void
 _bt_build_callback(Relation index,
@@ -1672,9 +1672,9 @@ _bt_parallel_scan_and_sort(BTSpool *btspool, BTSpool *btspool2,
 	indexInfo = BuildIndexInfo(btspool->index);
 	indexInfo->ii_Concurrent = btshared->isconcurrent;
 	scan = table_beginscan_parallel(btspool->heap, &btshared->heapdesc);
-	reltuples = IndexBuildHeapScan(btspool->heap, btspool->index, indexInfo,
-								   true, _bt_build_callback,
-								   (void *) &buildstate, scan);
+	reltuples = table_index_build_scan(btspool->heap, btspool->index, indexInfo,
+									   true, _bt_build_callback,
+									   (void *) &buildstate, scan);
 
 	/*
 	 * Execute this worker's part of the sort.
