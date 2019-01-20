@@ -564,6 +564,7 @@ static const TableAmRoutine heapam_methods = {
 	.tuple_lock = heapam_lock_tuple,
 
 	.tuple_fetch_row_version = heapam_fetch_row_version,
+	.tuple_get_latest_tid = heap_get_latest_tid,
 	.tuple_fetch_follow = heapam_fetch_follow,
 	.tuple_satisfies_snapshot = heapam_tuple_satisfies_snapshot,
 };

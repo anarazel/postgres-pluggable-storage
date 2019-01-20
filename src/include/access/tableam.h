@@ -165,6 +165,9 @@ typedef struct TableAmRoutine
 											Snapshot snapshot,
 											TupleTableSlot *slot,
 											Relation stats_relation);
+	void		(*tuple_get_latest_tid) (Relation rel,
+										 Snapshot snapshot,
+										 ItemPointer tid);
 	bool		(*tuple_fetch_follow) (struct IndexFetchTableData *scan,
 									   ItemPointer tid,
 									   Snapshot snapshot,
@@ -449,6 +452,14 @@ table_fetch_row_version(Relation rel,
 	return rel->rd_tableam->tuple_fetch_row_version(rel, tid,
 													snapshot, slot,
 													stats_relation);
+}
+
+static inline void
+table_get_latest_tid(Relation rel,
+					 Snapshot snapshot,
+					 ItemPointer tid)
+{
+	rel->rd_tableam->tuple_get_latest_tid(rel, snapshot, tid);
 }
 
 static inline bool
