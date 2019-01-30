@@ -2758,6 +2758,8 @@ CopyFrom(CopyState cstate)
 						nBufferedTuples = 0;
 
 						/* force new slots to be used */
+						if (table_slot_callbacks(prevResultRelInfo->ri_RelationDesc) !=
+							table_slot_callbacks(resultRelInfo->ri_RelationDesc))
 						for (int i = 0; i < MAX_BUFFERED_TUPLES; i++)
 						{
 							if (bufferedSlots[i] == NULL)
