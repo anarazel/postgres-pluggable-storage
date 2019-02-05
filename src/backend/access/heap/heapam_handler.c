@@ -427,6 +427,33 @@ retry:
 }
 
 static bool
+heapam_fetch_row_version(Relation relation,
+						 ItemPointer tid,
+						 Snapshot snapshot,
+						 TupleTableSlot *slot,
+						 Relation stats_relation)
+{
+	BufferHeapTupleTableSlot *bslot = (BufferHeapTupleTableSlot *) slot;
+	Buffer		buffer;
+
+	Assert(TTS_IS_BUFFERTUPLE(slot));
+
+	if (heap_fetch(relation, tid, snapshot, &bslot->base.tupdata, &buffer, stats_relation))
+	{
+		/* store in slot, transferring existing pin */
+		ExecStorePinnedBufferHeapTuple(&bslot->base.tupdata, slot, buffer);
+
+		slot->tts_tableOid = RelationGetRelid(relation);
+
+		return true;
+	}
+
+	slot->tts_tableOid = RelationGetRelid(relation);
+
+	return false;
+}
+
+static bool
 heapam_fetch_follow(struct IndexFetchTableData *scan,
 					ItemPointer tid,
 					Snapshot snapshot,
@@ -536,6 +563,7 @@ static const TableAmRoutine heapam_methods = {
 	.tuple_update = heapam_heap_update,
 	.tuple_lock = heapam_lock_tuple,
 
+	.tuple_fetch_row_version = heapam_fetch_row_version,
 	.tuple_fetch_follow = heapam_fetch_follow,
 	.tuple_satisfies_snapshot = heapam_tuple_satisfies_snapshot,
 };

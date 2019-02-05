@@ -160,6 +160,11 @@ typedef struct TableAmRoutine
 	 * ------------------------------------------------------------------------
 	 */
 
+	bool		(*tuple_fetch_row_version) (Relation rel,
+											ItemPointer tid,
+											Snapshot snapshot,
+											TupleTableSlot *slot,
+											Relation stats_relation);
 	bool		(*tuple_fetch_follow) (struct IndexFetchTableData *scan,
 									   ItemPointer tid,
 									   Snapshot snapshot,
@@ -428,6 +433,23 @@ table_lock_tuple(Relation rel, ItemPointer tid, Snapshot snapshot,
  * Non-modifying operations on individual tuples.
  * ----------------------------------------------------------------------------
  */
+
+/*
+ *	table_fetch_row_version		- retrieve tuple with given tid
+ *
+ *  XXX: This shouldn't just take a tid, but tid + additional information
+ */
+static inline bool
+table_fetch_row_version(Relation rel,
+						ItemPointer tid,
+						Snapshot snapshot,
+						TupleTableSlot *slot,
+						Relation stats_relation)
+{
+	return rel->rd_tableam->tuple_fetch_row_version(rel, tid,
+													snapshot, slot,
+													stats_relation);
+}
 
 static inline bool
 table_fetch_follow(struct IndexFetchTableData *scan,

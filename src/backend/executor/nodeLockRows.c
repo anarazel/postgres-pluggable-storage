@@ -21,7 +21,6 @@
 
 #include "postgres.h"
 
-#include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/tableam.h"
 #include "access/xact.h"
@@ -275,8 +274,6 @@ lnext:
 			ExecAuxRowMark *aerm = (ExecAuxRowMark *) lfirst(lc);
 			ExecRowMark *erm = aerm->rowmark;
 			TupleTableSlot *markSlot;
-			HeapTupleData tuple;
-			Buffer buffer;
 
 			markSlot = EvalPlanQualSlot(&node->lr_epqstate, erm->relation, erm->rti);
 
@@ -297,12 +294,9 @@ lnext:
 			Assert(ItemPointerIsValid(&(erm->curCtid)));
 
 			/* okay, fetch the tuple */
-			tuple.t_self = erm->curCtid;
-			if (!heap_fetch(erm->relation, &tuple.t_self, SnapshotAny, &tuple, &buffer,
-							NULL))
+			if (!table_fetch_row_version(erm->relation, &erm->curCtid, SnapshotAny, markSlot,
+							   NULL))
 				elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
-			ExecStorePinnedBufferHeapTuple(&tuple, markSlot, buffer);
-			ExecMaterializeSlot(markSlot);
 			/* successful, use tuple in slot */
 		}
 
