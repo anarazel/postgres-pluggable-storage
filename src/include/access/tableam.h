@@ -27,6 +27,32 @@ extern char *default_table_access_method;
 extern bool synchronize_seqscans;
 
 
+struct BulkInsertStateData;
+
+/*
+ * When table_update, table_delete, or table_lock_tuple fail because the target
+ * tuple is already outdated, they fill in this struct to provide information
+ * to the caller about what happened.
+ * ctid is the target's ctid link: it is the same as the target's TID if the
+ * target was deleted, or the location of the replacement tuple if the target
+ * was updated.
+ * xmax is the outdating transaction's XID.  If the caller wants to visit the
+ * replacement tuple, it must check that this matches before believing the
+ * replacement is really a match.
+ * cmax is the outdating command's CID, but only when the failure code is
+ * HeapTupleSelfUpdated (i.e., something in the current transaction outdated
+ * the tuple); otherwise cmax is zero.  (We make this restriction because
+ * HeapTupleHeaderGetCmax doesn't work for tuples outdated in other
+ * transactions.)
+ */
+typedef struct HeapUpdateFailureData
+{
+	ItemPointerData ctid;
+	TransactionId xmax;
+	CommandId	cmax;
+	bool		traversed;
+} HeapUpdateFailureData;
+
 /*
  * API struct for a table AM.  Note this must be allocated in a
  * server-lifetime manner, typically as a static const struct, which then gets
@@ -85,6 +111,50 @@ typedef struct TableAmRoutine
 	void		(*end_index_fetch) (struct IndexFetchTableData *data);
 
 
+	/* ------------------------------------------------------------------------
+	 * Manipulations of physical tuples.
+	 * ------------------------------------------------------------------------
+	 */
+
+	void		(*tuple_insert) (Relation rel, TupleTableSlot *slot, CommandId cid,
+								 int options, struct BulkInsertStateData *bistate);
+	void		(*tuple_insert_speculative) (Relation rel,
+											 TupleTableSlot *slot,
+											 CommandId cid,
+											 int options,
+											 struct BulkInsertStateData *bistate,
+											 uint32 specToken);
+	void		(*tuple_complete_speculative) (Relation rel,
+											   TupleTableSlot *slot,
+											   uint32 specToken,
+											   bool succeeded);
+	HTSU_Result (*tuple_delete) (Relation rel,
+								 ItemPointer tid,
+								 CommandId cid,
+								 Snapshot snapshot,
+								 Snapshot crosscheck,
+								 bool wait,
+								 HeapUpdateFailureData *hufd,
+								 bool changingPart);
+	HTSU_Result (*tuple_update) (Relation rel,
+								 ItemPointer otid,
+								 TupleTableSlot *slot,
+								 CommandId cid,
+								 Snapshot snapshot,
+								 Snapshot crosscheck,
+								 bool wait,
+								 HeapUpdateFailureData *hufd,
+								 LockTupleMode *lockmode,
+								 bool *update_indexes);
+	HTSU_Result (*tuple_lock) (Relation rel,
+							   ItemPointer tid,
+							   Snapshot snapshot,
+							   TupleTableSlot *slot,
+							   CommandId cid,
+							   LockTupleMode mode,
+							   LockWaitPolicy wait_policy,
+							   uint8 flags,
+							   HeapUpdateFailureData *hufd);
 	/* ------------------------------------------------------------------------
 	 * Non-modifying operations on individual tuples.
 	 * ------------------------------------------------------------------------
@@ -282,6 +352,79 @@ table_end_index_fetch_table(struct IndexFetchTableData *scan)
 
 
 /* ----------------------------------------------------------------------------
+ *  Manipulations of physical tuples.
+ * ----------------------------------------------------------------------------
+ */
+
+/*
+ * Insert a tuple from a slot into table AM routine
+ */
+static inline void
+table_insert(Relation rel, TupleTableSlot *slot, CommandId cid,
+			 int options, struct BulkInsertStateData *bistate)
+{
+	rel->rd_tableam->tuple_insert(rel, slot, cid, options,
+								  bistate);
+}
+
+static inline void
+table_insert_speculative(Relation rel, TupleTableSlot *slot, CommandId cid,
+						 int options, struct BulkInsertStateData *bistate, uint32 specToken)
+{
+	rel->rd_tableam->tuple_insert_speculative(rel, slot, cid, options,
+											  bistate, specToken);
+}
+
+static inline void
+table_complete_speculative(Relation rel, TupleTableSlot *slot, uint32 specToken,
+						   bool succeeded)
+{
+	return rel->rd_tableam->tuple_complete_speculative(rel, slot, specToken,
+													   succeeded);
+}
+
+/*
+ * Delete a tuple from tid using table AM routine
+ */
+static inline HTSU_Result
+table_delete(Relation rel, ItemPointer tid, CommandId cid,
+			 Snapshot snapshot, Snapshot crosscheck, bool wait,
+			 HeapUpdateFailureData *hufd, bool changingPart)
+{
+	return rel->rd_tableam->tuple_delete(rel, tid, cid,
+										 snapshot, crosscheck,
+										 wait, hufd, changingPart);
+}
+
+/*
+ * update a tuple from tid using table AM routine
+ */
+static inline HTSU_Result
+table_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
+			 CommandId cid, Snapshot snapshot, Snapshot crosscheck, bool wait,
+			 HeapUpdateFailureData *hufd, LockTupleMode *lockmode,
+			 bool *update_indexes)
+{
+	return rel->rd_tableam->tuple_update(rel, otid, slot,
+										 cid, snapshot, crosscheck,
+										 wait, hufd,
+										 lockmode, update_indexes);
+}
+
+/*
+ * Lock a tuple in the specified mode.
+ */
+static inline HTSU_Result
+table_lock_tuple(Relation rel, ItemPointer tid, Snapshot snapshot,
+				 TupleTableSlot *slot, CommandId cid, LockTupleMode mode,
+				 LockWaitPolicy wait_policy, uint8 flags,
+				 HeapUpdateFailureData *hufd)
+{
+	return rel->rd_tableam->tuple_lock(rel, tid, snapshot, slot,
+									   cid, mode, wait_policy,
+									   flags, hufd);
+}
+/* ----------------------------------------------------------------------------
  * Non-modifying operations on individual tuples.
  * ----------------------------------------------------------------------------
  */
@@ -313,6 +456,20 @@ table_tuple_satisfies_snapshot(Relation rel, TupleTableSlot *slot, Snapshot snap
 {
 	return rel->rd_tableam->tuple_satisfies_snapshot(rel, slot, snapshot);
 }
+
+
+
+
+/* ----------------------------------------------------------------------------
+ * Functions to make modifications a bit simpler.
+ * ----------------------------------------------------------------------------
+ */
+
+extern void simple_table_delete(Relation rel, ItemPointer tid,
+					Snapshot snapshot);
+extern void simple_table_update(Relation rel, ItemPointer otid,
+					TupleTableSlot *slot,
+					Snapshot snapshot, bool *update_indexes);
 
 
 /* ----------------------------------------------------------------------------

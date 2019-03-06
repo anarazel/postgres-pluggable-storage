@@ -35,34 +35,13 @@
 #define HEAP_INSERT_NO_LOGICAL	0x0010
 
 typedef struct BulkInsertStateData *BulkInsertState;
+struct HeapUpdateFailureData;
 
 #define MaxLockTupleMode	LockTupleExclusive
 
 /*
- * When heap_update, heap_delete, or heap_lock_tuple fail because the target
- * tuple is already outdated, they fill in this struct to provide information
- * to the caller about what happened.
- * ctid is the target's ctid link: it is the same as the target's TID if the
- * target was deleted, or the location of the replacement tuple if the target
- * was updated.
- * xmax is the outdating transaction's XID.  If the caller wants to visit the
- * replacement tuple, it must check that this matches before believing the
- * replacement is really a match.
- * cmax is the outdating command's CID, but only when the failure code is
- * HeapTupleSelfUpdated (i.e., something in the current transaction outdated
- * the tuple); otherwise cmax is zero.  (We make this restriction because
- * HeapTupleHeaderGetCmax doesn't work for tuples outdated in other
- * transactions.)
  * Descriptor for heap table scans.
  */
-typedef struct HeapUpdateFailureData
-{
-	ItemPointerData ctid;
-	TransactionId xmax;
-	CommandId	cmax;
-} HeapUpdateFailureData;
-
-
 typedef struct HeapScanDescData
 {
 	/* scan parameters */
@@ -150,8 +129,8 @@ extern struct TupleTableSlot *heap_getnextslot(TableScanDesc sscan,
 											   ScanDirection direction,
 											   struct TupleTableSlot *slot);
 
-extern bool heap_fetch(Relation relation, Snapshot snapshot,
-		   HeapTuple tuple, Buffer *userbuf, bool keep_buf,
+extern bool heap_fetch(Relation relation, ItemPointer tid, Snapshot snapshot,
+		   HeapTuple tuple, Buffer *userbuf,
 		   Relation stats_relation);
 extern bool heap_hot_search_buffer(ItemPointer tid, Relation relation,
 					   Buffer buffer, Snapshot snapshot, HeapTuple heapTuple,
@@ -164,7 +143,7 @@ extern void heap_get_latest_tid(Relation relation, Snapshot snapshot,
 extern void setLastTid(const ItemPointer tid);
 
 extern BulkInsertState GetBulkInsertState(void);
-extern void FreeBulkInsertState(BulkInsertState);
+extern void FreeBulkInsertState(BulkInsertState bistate);
 extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);
 
 extern void heap_insert(Relation relation, HeapTuple tup, CommandId cid,
@@ -173,17 +152,18 @@ extern void heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 				  CommandId cid, int options, BulkInsertState bistate);
 extern HTSU_Result heap_delete(Relation relation, ItemPointer tid,
 			CommandId cid, Snapshot crosscheck, bool wait,
-			HeapUpdateFailureData *hufd, bool changingPart);
+			struct HeapUpdateFailureData *hufd, bool changingPart);
 extern void heap_finish_speculative(Relation relation, HeapTuple tuple);
 extern void heap_abort_speculative(Relation relation, HeapTuple tuple);
 extern HTSU_Result heap_update(Relation relation, ItemPointer otid,
 			HeapTuple newtup,
 			CommandId cid, Snapshot crosscheck, bool wait,
-			HeapUpdateFailureData *hufd, LockTupleMode *lockmode);
-extern HTSU_Result heap_lock_tuple(Relation relation, HeapTuple tuple,
+			struct HeapUpdateFailureData *hufd, LockTupleMode *lockmode);
+extern HTSU_Result heap_lock_tuple(Relation relation, ItemPointer tid,
 				CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
-				bool follow_update,
-				Buffer *buffer, HeapUpdateFailureData *hufd);
+				bool follow_update, HeapTuple tuple,
+				Buffer *buffer, struct HeapUpdateFailureData *hufd);
+
 extern void heap_inplace_update(Relation relation, HeapTuple tuple);
 extern bool heap_freeze_tuple(HeapTupleHeader tuple,
 				  TransactionId relfrozenxid, TransactionId relminmxid,

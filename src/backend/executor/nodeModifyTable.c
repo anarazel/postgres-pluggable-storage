@@ -42,6 +42,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
+#include "catalog/pg_am.h"
 #include "commands/trigger.h"
 #include "executor/execPartition.h"
 #include "executor/executor.h"
@@ -190,31 +191,33 @@ ExecProcessReturning(ResultRelInfo *resultRelInfo,
  */
 static void
 ExecCheckHeapTupleVisible(EState *estate,
-						  HeapTuple tuple,
-						  Buffer buffer)
+						  Relation rel,
+						  TupleTableSlot *slot)
 {
 	if (!IsolationUsesXactSnapshot())
 		return;
 
-	/*
-	 * We need buffer pin and lock to call HeapTupleSatisfiesVisibility.
-	 * Caller should be holding pin, but not lock.
-	 */
-	LockBuffer(buffer, BUFFER_LOCK_SHARE);
-	if (!HeapTupleSatisfiesVisibility(tuple, estate->es_snapshot, buffer))
+	if (!table_tuple_satisfies_snapshot(rel, slot, estate->es_snapshot))
 	{
+		Datum		xminDatum;
+		TransactionId xmin;
+		bool		isnull;
+
+		xminDatum = slot_getsysattr(slot, MinTransactionIdAttributeNumber, &isnull);
+		Assert(!isnull);
+		xmin = DatumGetTransactionId(xminDatum);
+
 		/*
 		 * We should not raise a serialization failure if the conflict is
 		 * against a tuple inserted by our own transaction, even if it's not
 		 * visible to our snapshot.  (This would happen, for example, if
 		 * conflicting keys are proposed for insertion in a single command.)
 		 */
-		if (!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetXmin(tuple->t_data)))
+		if (!TransactionIdIsCurrentTransactionId(xmin))
 			ereport(ERROR,
 					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 					 errmsg("could not serialize access due to concurrent update")));
 	}
-	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 }
 
 /*
@@ -223,7 +226,8 @@ ExecCheckHeapTupleVisible(EState *estate,
 static void
 ExecCheckTIDVisible(EState *estate,
 					ResultRelInfo *relinfo,
-					ItemPointer tid)
+					ItemPointer tid,
+					TupleTableSlot *tempSlot)
 {
 	Relation	rel = relinfo->ri_RelationDesc;
 	Buffer		buffer;
@@ -234,10 +238,10 @@ ExecCheckTIDVisible(EState *estate,
 		return;
 
 	tuple.t_self = *tid;
-	if (!heap_fetch(rel, SnapshotAny, &tuple, &buffer, false, NULL))
+	if (!heap_fetch(rel, &tuple.t_self, SnapshotAny, &tuple, &buffer, NULL))
 		elog(ERROR, "failed to fetch conflicting tuple for ON CONFLICT");
-	ExecCheckHeapTupleVisible(estate, &tuple, buffer);
-	ReleaseBuffer(buffer);
+	ExecStorePinnedBufferHeapTuple(&tuple, tempSlot, buffer);
+	ExecCheckHeapTupleVisible(estate, rel, tempSlot);
 }
 
 /* ----------------------------------------------------------------
@@ -319,7 +323,6 @@ ExecInsert(ModifyTableState *mtstate,
 	else
 	{
 		WCOKind		wco_kind;
-		HeapTuple	inserttuple;
 
 		/*
 		 * Constraints might reference the tableoid column, so (re-)initialize
@@ -417,15 +420,18 @@ ExecInsert(ModifyTableState *mtstate,
 					 * In case of ON CONFLICT DO NOTHING, do nothing. However,
 					 * verify that the tuple is visible to the executor's MVCC
 					 * snapshot at higher isolation levels.
+					 *
+					 * FIXME: Either comment or replace usage of
+					 * ExecGetReturningSlot(). Need a slot that's compatible
+					 * with the resultRelInfo table.
 					 */
 					Assert(onconflict == ONCONFLICT_NOTHING);
-					ExecCheckTIDVisible(estate, resultRelInfo, &conflictTid);
+					ExecCheckTIDVisible(estate, resultRelInfo, &conflictTid,
+										ExecGetReturningSlot(estate, resultRelInfo));
 					InstrCountTuples2(&mtstate->ps, 1);
 					return NULL;
 				}
 			}
-
-			inserttuple = ExecFetchSlotHeapTuple(slot, true, NULL);
 
 			/*
 			 * Before we start insertion proper, acquire our "speculative
@@ -434,26 +440,23 @@ ExecInsert(ModifyTableState *mtstate,
 			 * waiting for the whole transaction to complete.
 			 */
 			specToken = SpeculativeInsertionLockAcquire(GetCurrentTransactionId());
-			HeapTupleHeaderSetSpeculativeToken(inserttuple->t_data, specToken);
 
 			/* insert the tuple, with the speculative token */
-			heap_insert(resultRelationDesc, inserttuple,
-						estate->es_output_cid,
-						HEAP_INSERT_SPECULATIVE,
-						NULL);
+			table_insert_speculative(resultRelationDesc, slot,
+									 estate->es_output_cid,
+									 HEAP_INSERT_SPECULATIVE,
+									 NULL,
+									 specToken);
 			slot->tts_tableOid = RelationGetRelid(resultRelationDesc);
-			ItemPointerCopy(&inserttuple->t_self, &slot->tts_tid);
 
 			/* insert index entries for tuple */
-			recheckIndexes = ExecInsertIndexTuples(slot, &(inserttuple->t_self),
+			recheckIndexes = ExecInsertIndexTuples(slot,
 												   estate, true, &specConflict,
 												   arbiterIndexes);
 
 			/* adjust the tuple's state accordingly */
-			if (!specConflict)
-				heap_finish_speculative(resultRelationDesc, inserttuple);
-			else
-				heap_abort_speculative(resultRelationDesc, inserttuple);
+			table_complete_speculative(resultRelationDesc, slot,
+									   specToken, specConflict);
 
 			/*
 			 * Wake up anyone waiting for our decision.  They will re-check
@@ -481,21 +484,15 @@ ExecInsert(ModifyTableState *mtstate,
 		{
 			/*
 			 * insert the tuple normally.
-			 *
-			 * Note: heap_insert returns the tid (location) of the new tuple
-			 * in the t_self field.
 			 */
-			inserttuple = ExecFetchSlotHeapTuple(slot, true, NULL);
-			heap_insert(resultRelationDesc, inserttuple,
-						estate->es_output_cid,
-						0, NULL);
+			table_insert(resultRelationDesc, slot,
+						 estate->es_output_cid,
+						 0, NULL);
 			slot->tts_tableOid = RelationGetRelid(resultRelationDesc);
-			ItemPointerCopy(&inserttuple->t_self, &slot->tts_tid);
 
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0)
-				recheckIndexes = ExecInsertIndexTuples(slot, &(inserttuple->t_self),
-													   estate, false, NULL,
+				recheckIndexes = ExecInsertIndexTuples(slot, estate, false, NULL,
 													   NIL);
 		}
 	}
@@ -671,12 +668,58 @@ ExecDelete(ModifyTableState *mtstate,
 		 * mode transactions.
 		 */
 ldelete:;
-		result = heap_delete(resultRelationDesc, tupleid,
-							 estate->es_output_cid,
-							 estate->es_crosscheck_snapshot,
-							 true /* wait for commit */ ,
-							 &hufd,
-							 changingPart);
+		result = table_delete(resultRelationDesc, tupleid,
+							  estate->es_output_cid,
+							  estate->es_snapshot,
+							  estate->es_crosscheck_snapshot,
+							  true /* wait for commit */ ,
+							  &hufd,
+							  changingPart);
+
+		if (result == HeapTupleUpdated && !IsolationUsesXactSnapshot())
+		{
+			EvalPlanQualBegin(epqstate, estate);
+			slot = EvalPlanQualSlot(epqstate, resultRelationDesc, resultRelInfo->ri_RangeTableIndex);
+
+			result = table_lock_tuple(resultRelationDesc, tupleid,
+									  estate->es_snapshot,
+									  slot, estate->es_output_cid,
+									  LockTupleExclusive, LockWaitBlock,
+									  TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+									  &hufd);
+			/*hari FIXME*/
+			/*Assert(result != HeapTupleUpdated && hufd.traversed);*/
+			if (result == HeapTupleMayBeUpdated)
+			{
+				TupleTableSlot *epqslot;
+
+				epqslot = EvalPlanQual(estate,
+									   epqstate,
+									   resultRelationDesc,
+									   resultRelInfo->ri_RangeTableIndex,
+									   slot);
+				if (TupIsNull(epqslot))
+				{
+					/* Tuple no more passing quals, exiting... */
+					return NULL;
+				}
+
+				/**/
+				if (epqreturnslot)
+				{
+					*epqreturnslot = epqslot;
+					return NULL;
+				}
+
+				goto ldelete;
+			}
+			else if (result == HeapTupleInvisible)
+			{
+				/* tuple is not visible; nothing to do */
+				return NULL;
+			}
+		}
+
 		switch (result)
 		{
 			case HeapTupleSelfUpdated:
@@ -722,39 +765,16 @@ ldelete:;
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
-				if (ItemPointerIndicatesMovedPartitions(&hufd.ctid))
+				else
+					/* shouldn't get there */
+					elog(ERROR, "wrong heap_delete status: %u", result);
+				break;
+
+			case HeapTupleDeleted:
+				if (IsolationUsesXactSnapshot())
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-							 errmsg("tuple to be deleted was already moved to another partition due to concurrent update")));
-
-				if (!ItemPointerEquals(tupleid, &hufd.ctid))
-				{
-					TupleTableSlot *my_epqslot;
-
-					my_epqslot = EvalPlanQual(estate,
-											  epqstate,
-											  resultRelationDesc,
-											  resultRelInfo->ri_RangeTableIndex,
-											  LockTupleExclusive,
-											  &hufd.ctid,
-											  hufd.xmax);
-					if (!TupIsNull(my_epqslot))
-					{
-						*tupleid = hufd.ctid;
-
-						/*
-						 * If requested, skip delete and pass back the updated
-						 * row.
-						 */
-						if (epqreturnslot)
-						{
-							*epqreturnslot = my_epqslot;
-							return NULL;
-						}
-						else
-							goto ldelete;
-					}
-				}
+							 errmsg("could not serialize access due to concurrent delete")));
 				/* tuple already deleted; nothing to do */
 				return NULL;
 
@@ -841,8 +861,8 @@ ldelete:;
 				deltuple = &bslot->base.tupdata;
 
 				deltuple->t_self = *tupleid;
-				if (!heap_fetch(resultRelationDesc, SnapshotAny,
-								deltuple, &buffer, false, NULL))
+				if (!heap_fetch(resultRelationDesc, &deltuple->t_self, SnapshotAny,
+								deltuple, &buffer, NULL))
 					elog(ERROR, "failed to fetch deleted tuple for DELETE RETURNING");
 
 				ExecStorePinnedBufferHeapTuple(deltuple, slot, buffer);
@@ -897,7 +917,6 @@ ExecUpdate(ModifyTableState *mtstate,
 		   EState *estate,
 		   bool canSetTag)
 {
-	HeapTuple	updatetuple;
 	ResultRelInfo *resultRelInfo;
 	Relation	resultRelationDesc;
 	HTSU_Result result;
@@ -925,7 +944,7 @@ ExecUpdate(ModifyTableState *mtstate,
 	{
 		if (!ExecBRUpdateTriggers(estate, epqstate, resultRelInfo,
 								  tupleid, oldtuple, slot))
-			return NULL;        /* "do nothing" */
+			return NULL;		/* "do nothing" */
 	}
 
 	/* INSTEAD OF ROW UPDATE Triggers */
@@ -934,7 +953,7 @@ ExecUpdate(ModifyTableState *mtstate,
 	{
 		if (!ExecIRUpdateTriggers(estate, resultRelInfo,
 								  oldtuple, slot))
-			return NULL;        /* "do nothing" */
+			return NULL;		/* "do nothing" */
 	}
 	else if (resultRelInfo->ri_FdwRoutine)
 	{
@@ -960,6 +979,7 @@ ExecUpdate(ModifyTableState *mtstate,
 	{
 		LockTupleMode lockmode;
 		bool		partition_constraint_failed;
+		bool		update_indexes;
 
 		/*
 		 * Constraints might reference the tableoid column, so (re-)initialize
@@ -977,6 +997,9 @@ ExecUpdate(ModifyTableState *mtstate,
 		 * correct tuple, so there's no need to do them again.)
 		 */
 lreplace:;
+
+		/* ensure slot is independent, consider e.g. EPQ */
+		ExecMaterializeSlot(slot);
 
 		/*
 		 * If partition constraint fails, this row might get moved to another
@@ -1145,14 +1168,53 @@ lreplace:;
 		 * needed for referential integrity updates in transaction-snapshot
 		 * mode transactions.
 		 */
-		updatetuple = ExecFetchSlotHeapTuple(slot, true, NULL);
-		result = heap_update(resultRelationDesc, tupleid,
-							 updatetuple,
-							 estate->es_output_cid,
-							 estate->es_crosscheck_snapshot,
-							 true /* wait for commit */ ,
-							 &hufd, &lockmode);
-		ItemPointerCopy(&updatetuple->t_self, &slot->tts_tid);
+		result = table_update(resultRelationDesc, tupleid, slot,
+							  estate->es_output_cid,
+							  estate->es_snapshot,
+							  estate->es_crosscheck_snapshot,
+							  true /* wait for commit */ ,
+							  &hufd, &lockmode, &update_indexes);
+
+		if (result == HeapTupleUpdated && !IsolationUsesXactSnapshot())
+		{
+			TupleTableSlot *inputslot;
+
+			EvalPlanQualBegin(epqstate, estate);
+
+			inputslot = EvalPlanQualSlot(epqstate, resultRelationDesc, resultRelInfo->ri_RangeTableIndex);
+			ExecCopySlot(inputslot, slot);
+
+			result = table_lock_tuple(resultRelationDesc, tupleid,
+									  estate->es_snapshot,
+									  inputslot, estate->es_output_cid,
+									  lockmode, LockWaitBlock,
+									  TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+									  &hufd);
+			/* hari FIXME*/
+			/*Assert(result != HeapTupleUpdated && hufd.traversed);*/
+			if (result == HeapTupleMayBeUpdated)
+			{
+				TupleTableSlot *epqslot;
+
+				epqslot = EvalPlanQual(estate,
+									   epqstate,
+									   resultRelationDesc,
+									   resultRelInfo->ri_RangeTableIndex,
+									   inputslot);
+				if (TupIsNull(epqslot))
+				{
+					/* Tuple no more passing quals, exiting... */
+					return NULL;
+				}
+				slot = ExecFilterJunk(resultRelInfo->ri_junkFilter, epqslot);
+				goto lreplace;
+			}
+			else if (result == HeapTupleInvisible)
+			{
+				/* tuple is not visible; nothing to do */
+				return NULL;
+			}
+		}
 
 		switch (result)
 		{
@@ -1194,33 +1256,22 @@ lreplace:;
 				break;
 
 			case HeapTupleUpdated:
+
+				/*
+				 * The lower level isolation case for HeapTupleUpdated is
+				 * handled above.
+				 */
+				Assert(IsolationUsesXactSnapshot());
+				ereport(ERROR,
+						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+						 errmsg("could not serialize access due to concurrent update")));
+				break;
+
+			case HeapTupleDeleted:
 				if (IsolationUsesXactSnapshot())
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-							 errmsg("could not serialize access due to concurrent update")));
-				if (ItemPointerIndicatesMovedPartitions(&hufd.ctid))
-					ereport(ERROR,
-							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-							 errmsg("tuple to be updated was already moved to another partition due to concurrent update")));
-
-				if (!ItemPointerEquals(tupleid, &hufd.ctid))
-				{
-					TupleTableSlot *epqslot;
-
-					epqslot = EvalPlanQual(estate,
-										   epqstate,
-										   resultRelationDesc,
-										   resultRelInfo->ri_RangeTableIndex,
-										   lockmode,
-										   &hufd.ctid,
-										   hufd.xmax);
-					if (!TupIsNull(epqslot))
-					{
-						*tupleid = hufd.ctid;
-						slot = ExecFilterJunk(resultRelInfo->ri_junkFilter, epqslot);
-						goto lreplace;
-					}
-				}
+							 errmsg("could not serialize access due to concurrent delete")));
 				/* tuple already deleted; nothing to do */
 				return NULL;
 
@@ -1241,13 +1292,12 @@ lreplace:;
 		 * insert index entries for tuple
 		 *
 		 * Note: heap_update returns the tid (location) of the new tuple in
-		 * the t_self field.
+		 * the t_self field.  FIXME
 		 *
 		 * If it's a HOT update, we mustn't insert new index entries.
 		 */
-		if (resultRelInfo->ri_NumIndices > 0 && !HeapTupleIsHeapOnly(updatetuple))
-			recheckIndexes = ExecInsertIndexTuples(slot, &(updatetuple->t_self),
-												   estate, false, NULL, NIL);
+		if (resultRelInfo->ri_NumIndices > 0 && update_indexes)
+			recheckIndexes = ExecInsertIndexTuples(slot, estate, false, NULL, NIL);
 	}
 
 	if (canSetTag)
@@ -1306,11 +1356,12 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 	Relation	relation = resultRelInfo->ri_RelationDesc;
 	ExprState  *onConflictSetWhere = resultRelInfo->ri_onConflict->oc_WhereClause;
 	TupleTableSlot *existing = resultRelInfo->ri_onConflict->oc_Existing;
-	HeapTupleData tuple;
 	HeapUpdateFailureData hufd;
 	LockTupleMode lockmode;
 	HTSU_Result test;
-	Buffer		buffer;
+	Datum		xminDatum;
+	TransactionId xmin;
+	bool		isnull;
 
 	/* Determine lock mode to use */
 	lockmode = ExecUpdateLockMode(estate, resultRelInfo);
@@ -1321,10 +1372,11 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 	 * previous conclusion that the tuple is conclusively committed is not
 	 * true anymore.
 	 */
-	tuple.t_self = *conflictTid;
-	test = heap_lock_tuple(relation, &tuple, estate->es_output_cid,
-						   lockmode, LockWaitBlock, false, &buffer,
-						   &hufd);
+	test = table_lock_tuple(relation, conflictTid,
+							estate->es_snapshot,
+							existing, estate->es_output_cid,
+							lockmode, LockWaitBlock, 0,
+							&hufd);
 	switch (test)
 	{
 		case HeapTupleMayBeUpdated:
@@ -1349,7 +1401,13 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 			 * that for SQL MERGE, an exception must be raised in the event of
 			 * an attempt to update the same row twice.
 			 */
-			if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetXmin(tuple.t_data)))
+			xminDatum = slot_getsysattr(existing,
+										MinTransactionIdAttributeNumber,
+										&isnull);
+			Assert(!isnull);
+			xmin = DatumGetTransactionId(xminDatum);
+
+			if (TransactionIdIsCurrentTransactionId(xmin))
 				ereport(ERROR,
 						(errcode(ERRCODE_CARDINALITY_VIOLATION),
 						 errmsg("ON CONFLICT DO UPDATE command cannot affect row a second time"),
@@ -1390,7 +1448,16 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 			 * loop here, as the new version of the row might not conflict
 			 * anymore, or the conflicting tuple has actually been deleted.
 			 */
-			ReleaseBuffer(buffer);
+			ExecClearTuple(existing);
+			return false;
+
+		case HeapTupleDeleted:
+			if (IsolationUsesXactSnapshot())
+				ereport(ERROR,
+						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+						 errmsg("could not serialize access due to concurrent delete")));
+
+			ExecClearTuple(existing);
 			return false;
 
 		default:
@@ -1412,10 +1479,7 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 	 * snapshot.  This is in line with the way UPDATE deals with newer tuple
 	 * versions.
 	 */
-	ExecCheckHeapTupleVisible(estate, &tuple, buffer);
-
-	/* Store target's existing tuple in the state's dedicated slot */
-	ExecStoreBufferHeapTuple(&tuple, existing, buffer);
+	ExecCheckHeapTupleVisible(estate, relation, existing);
 
 	/*
 	 * Make tuple and any needed join variables available to ExecQual and
@@ -1430,7 +1494,7 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 
 	if (!ExecQual(onConflictSetWhere, econtext))
 	{
-		ReleaseBuffer(buffer);
+		ExecClearTuple(existing);
 		InstrCountFiltered1(&mtstate->ps, 1);
 		return true;			/* done with the tuple */
 	}
@@ -1470,13 +1534,11 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 	 */
 
 	/* Execute UPDATE with projection */
-	*returning = ExecUpdate(mtstate, &tuple.t_self, NULL,
+	*returning = ExecUpdate(mtstate, conflictTid, NULL,
 							resultRelInfo->ri_onConflict->oc_ProjSlot,
 							planSlot,
 							&mtstate->mt_epqstate, mtstate->ps.state,
 							canSetTag);
-
-	ReleaseBuffer(buffer);
 	ExecClearTuple(existing);
 	return true;
 }

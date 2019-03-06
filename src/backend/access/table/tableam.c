@@ -152,6 +152,101 @@ table_beginscan_catalog(Relation relation, int nkeys, struct ScanKeyData *key)
 											true, true, true, false, false, true);
 }
 
+/*
+ *	simple_table_update - replace a tuple
+ *
+ * This routine may be used to update a tuple when concurrent updates of
+ * the target tuple are not expected (for example, because we have a lock
+ * on the relation associated with the tuple).  Any failure is reported
+ * via ereport().
+ */
+void
+simple_table_update(Relation rel, ItemPointer otid,
+					TupleTableSlot *slot,
+					Snapshot snapshot,
+					bool *update_indexes)
+{
+	HTSU_Result result;
+	HeapUpdateFailureData hufd;
+	LockTupleMode lockmode;
+
+	result = table_update(rel, otid, slot,
+						  GetCurrentCommandId(true),
+						  snapshot, InvalidSnapshot,
+						  true /* wait for commit */ ,
+						  &hufd, &lockmode, update_indexes);
+
+	switch (result)
+	{
+		case HeapTupleSelfUpdated:
+			/* Tuple was already updated in current command? */
+			elog(ERROR, "tuple already updated by self");
+			break;
+
+		case HeapTupleMayBeUpdated:
+			/* done successfully */
+			break;
+
+		case HeapTupleUpdated:
+			elog(ERROR, "tuple concurrently updated");
+			break;
+
+		case HeapTupleDeleted:
+			elog(ERROR, "tuple concurrently deleted");
+			break;
+
+		default:
+			elog(ERROR, "unrecognized heap_update status: %u", result);
+			break;
+	}
+
+}
+
+/*
+ *	simple_table_delete - delete a tuple
+ *
+ * This routine may be used to delete a tuple when concurrent updates of
+ * the target tuple are not expected (for example, because we have a lock
+ * on the relation associated with the tuple).  Any failure is reported
+ * via ereport().
+ */
+void
+simple_table_delete(Relation rel, ItemPointer tid, Snapshot snapshot)
+{
+	HTSU_Result result;
+	HeapUpdateFailureData hufd;
+
+	result = table_delete(rel, tid,
+						  GetCurrentCommandId(true),
+						  snapshot, InvalidSnapshot,
+						  true /* wait for commit */ ,
+						  &hufd, false /* changingPart */ );
+
+	switch (result)
+	{
+		case HeapTupleSelfUpdated:
+			/* Tuple was already updated in current command? */
+			elog(ERROR, "tuple already updated by self");
+			break;
+
+		case HeapTupleMayBeUpdated:
+			/* done successfully */
+			break;
+
+		case HeapTupleUpdated:
+			elog(ERROR, "tuple concurrently updated");
+			break;
+
+		case HeapTupleDeleted:
+			elog(ERROR, "tuple concurrently deleted");
+			break;
+
+		default:
+			elog(ERROR, "unrecognized heap_delete status: %u", result);
+			break;
+	}
+}
+
 
 Size
 table_block_parallelscan_estimate(Relation rel)
