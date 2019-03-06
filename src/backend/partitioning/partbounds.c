@@ -14,7 +14,8 @@
 
 #include "postgres.h"
 
-#include "access/heapam.h"
+#include "access/relation.h"
+#include "access/table.h"
 #include "access/tableam.h"
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
@@ -1203,12 +1204,10 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 		Expr	   *constr;
 		Expr	   *partition_constraint;
 		EState	   *estate;
-		HeapTuple	tuple;
 		ExprState  *partqualstate = NULL;
 		Snapshot	snapshot;
 		ExprContext *econtext;
 		TableScanDesc scan;
-		HeapScanDesc hscan;
 		MemoryContext oldCxt;
 		TupleTableSlot *tupslot;
 
@@ -1268,7 +1267,6 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
 		tupslot = table_gimmegimmeslot(part_rel, &estate->es_tupleTable);
 		scan = table_beginscan(part_rel, snapshot, 0, NULL);
-		hscan = (HeapScanDesc) scan;
 
 		/*
 		 * Switch to per-tuple memory context and reset it for each tuple
@@ -1276,9 +1274,8 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 		 */
 		oldCxt = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 
-		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+		while (table_scan_getnextslot(scan, ForwardScanDirection, tupslot))
 		{
-			ExecStoreBufferHeapTuple(tuple, tupslot, hscan->rs_cbuf);
 			econtext->ecxt_scantuple = tupslot;
 
 			if (!ExecCheck(partqualstate, econtext))

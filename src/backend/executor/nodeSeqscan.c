@@ -27,7 +27,6 @@
  */
 #include "postgres.h"
 
-#include "access/heapam.h"
 #include "access/relscan.h"
 #include "access/tableam.h"
 #include "executor/execdebug.h"
@@ -50,9 +49,7 @@ static TupleTableSlot *SeqNext(SeqScanState *node);
 static TupleTableSlot *
 SeqNext(SeqScanState *node)
 {
-	HeapTuple	tuple;
 	TableScanDesc scandesc;
-	HeapScanDesc hscandesc;
 	EState	   *estate;
 	ScanDirection direction;
 	TupleTableSlot *slot;
@@ -77,30 +74,10 @@ SeqNext(SeqScanState *node)
 		node->ss.ss_currentScanDesc = scandesc;
 	}
 
-	hscandesc = (HeapScanDesc) scandesc;
-
 	/*
 	 * get the next tuple from the table
 	 */
-	tuple = heap_getnext(scandesc, direction);
-
-	/*
-	 * save the tuple and the buffer returned to us by the access methods in
-	 * our scan tuple slot and return the slot.  Note: we pass 'false' because
-	 * tuples returned by heap_getnext() are pointers onto disk pages and were
-	 * not created with palloc() and so should not be pfree()'d.  Note also
-	 * that ExecStoreHeapTuple will increment the refcount of the buffer; the
-	 * refcount will not be dropped until the tuple table slot is cleared.
-	 */
-	if (tuple)
-		ExecStoreBufferHeapTuple(tuple, /* tuple to store */
-								 slot,	/* slot to store in */
-								 hscandesc->rs_cbuf);	/* buffer associated
-														 * with this tuple */
-	else
-		ExecClearTuple(slot);
-
-	return slot;
+	return table_scan_getnextslot(scandesc, direction, slot);
 }
 
 /*

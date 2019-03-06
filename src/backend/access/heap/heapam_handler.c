@@ -170,6 +170,7 @@ static const TableAmRoutine heapam_methods = {
 	.scan_end = heap_endscan,
 	.scan_rescan = heap_rescan,
 	.scan_update_snapshot = heap_update_snapshot,
+	.scan_getnextslot = heap_getnextslot,
 
 	.parallelscan_estimate = table_block_parallelscan_estimate,
 	.parallelscan_initialize = table_block_parallelscan_initialize,

@@ -426,6 +426,7 @@ DefineQueryRewrite(const char *rulename,
 		{
 			TableScanDesc scanDesc;
 			Snapshot	snapshot;
+			TupleTableSlot *slot;
 
 			if (event_relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 				ereport(ERROR,
@@ -441,11 +442,13 @@ DefineQueryRewrite(const char *rulename,
 
 			snapshot = RegisterSnapshot(GetLatestSnapshot());
 			scanDesc = table_beginscan(event_relation, snapshot, 0, NULL);
-			if (heap_getnext(scanDesc, ForwardScanDirection) != NULL)
+			slot = table_gimmegimmeslot(event_relation, NULL);
+			if (table_scan_getnextslot(scanDesc, ForwardScanDirection, slot))
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						 errmsg("could not convert table \"%s\" to a view because it is not empty",
 								RelationGetRelationName(event_relation))));
+			ExecDropSingleTupleTableSlot(slot);
 			table_endscan(scanDesc);
 			UnregisterSnapshot(snapshot);
 

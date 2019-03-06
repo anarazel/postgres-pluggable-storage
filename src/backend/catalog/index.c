@@ -2969,9 +2969,7 @@ IndexCheckExclusion(Relation heapRelation,
 					Relation indexRelation,
 					IndexInfo *indexInfo)
 {
-	HeapTuple	heapTuple;
 	TableScanDesc scan;
-	HeapScanDesc hscan;
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
 	ExprState  *predicate;
@@ -3012,16 +3010,10 @@ IndexCheckExclusion(Relation heapRelation,
 								 NULL,	/* scan key */
 								 true,	/* buffer access strategy OK */
 								 true); /* syncscan OK */
-	hscan = (HeapScanDesc) scan;
 
-	while ((heapTuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 	{
 		CHECK_FOR_INTERRUPTS();
-
-		MemoryContextReset(econtext->ecxt_per_tuple_memory);
-
-		/* Set up for predicate or expression evaluation */
-		ExecStoreBufferHeapTuple(heapTuple, slot, hscan->rs_cbuf);
 
 		/*
 		 * In a partial index, ignore tuples that don't satisfy the predicate.
@@ -3046,8 +3038,10 @@ IndexCheckExclusion(Relation heapRelation,
 		 */
 		check_exclusion_constraint(heapRelation,
 								   indexRelation, indexInfo,
-								   &(heapTuple->t_self), values, isnull,
+								   &(slot->tts_tid), values, isnull,
 								   estate, true);
+
+		MemoryContextReset(econtext->ecxt_per_tuple_memory);
 	}
 
 	table_endscan(scan);

@@ -430,7 +430,7 @@ systable_getnext(SysScanDesc sysscan)
 	}
 	else
 	{
-		if (heap_getnextslot(sysscan->scan, ForwardScanDirection, sysscan->slot))
+		if (table_scan_getnextslot(sysscan->scan, ForwardScanDirection, sysscan->slot))
 		{
 			bool		shouldFree;
 

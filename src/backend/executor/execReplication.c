@@ -221,19 +221,21 @@ retry:
 }
 
 /*
- * Compare the tuple and slot and check if they have equal values.
+ * Compare the tuples in the slots by checking if they have equal values.
  */
 static bool
-tuple_equals_slot(TupleDesc desc, HeapTuple tup, TupleTableSlot *slot)
+tuples_equal(TupleTableSlot *slot1, TupleTableSlot *slot2)
 {
-	Datum		values[MaxTupleAttributeNumber];
-	bool		isnull[MaxTupleAttributeNumber];
-	int			attrnum;
+	int         attrnum;
 
-	heap_deform_tuple(tup, desc, values, isnull);
+	Assert(slot1->tts_tupleDescriptor->natts ==
+		   slot2->tts_tupleDescriptor->natts);
+
+	slot_getallattrs(slot1);
+	slot_getallattrs(slot2);
 
 	/* Check equality of the attributes. */
-	for (attrnum = 0; attrnum < desc->natts; attrnum++)
+	for (attrnum = 0; attrnum < slot1->tts_tupleDescriptor->natts; attrnum++)
 	{
 		Form_pg_attribute att;
 		TypeCacheEntry *typentry;
@@ -242,16 +244,16 @@ tuple_equals_slot(TupleDesc desc, HeapTuple tup, TupleTableSlot *slot)
 		 * If one value is NULL and other is not, then they are certainly not
 		 * equal
 		 */
-		if (isnull[attrnum] != slot->tts_isnull[attrnum])
+		if (slot1->tts_isnull[attrnum] != slot2->tts_isnull[attrnum])
 			return false;
 
 		/*
 		 * If both are NULL, they can be considered equal.
 		 */
-		if (isnull[attrnum])
+		if (slot1->tts_isnull[attrnum] || slot2->tts_isnull[attrnum])
 			continue;
 
-		att = TupleDescAttr(desc, attrnum);
+		att = TupleDescAttr(slot1->tts_tupleDescriptor, attrnum);
 
 		typentry = lookup_type_cache(att->atttypid, TYPECACHE_EQ_OPR_FINFO);
 		if (!OidIsValid(typentry->eq_opr_finfo.fn_oid))
@@ -261,8 +263,8 @@ tuple_equals_slot(TupleDesc desc, HeapTuple tup, TupleTableSlot *slot)
 							format_type_be(att->atttypid))));
 
 		if (!DatumGetBool(FunctionCall2(&typentry->eq_opr_finfo,
-										values[attrnum],
-										slot->tts_values[attrnum])))
+										slot1->tts_values[attrnum],
+										slot2->tts_values[attrnum])))
 			return false;
 	}
 
@@ -283,18 +285,19 @@ bool
 RelationFindReplTupleSeq(Relation rel, LockTupleMode lockmode,
 						 TupleTableSlot *searchslot, TupleTableSlot *outslot)
 {
-	HeapTuple	scantuple;
+	TupleTableSlot *scanslot;
 	TableScanDesc scan;
 	SnapshotData snap;
 	TransactionId xwait;
 	bool		found;
-	TupleDesc	desc = RelationGetDescr(rel);
+	TupleDesc	desc PG_USED_FOR_ASSERTS_ONLY = RelationGetDescr(rel);
 
 	Assert(equalTupleDescs(desc, outslot->tts_tupleDescriptor));
 
 	/* Start a heap scan. */
 	InitDirtySnapshot(snap);
 	scan = table_beginscan(rel, &snap, 0, NULL);
+	scanslot = table_gimmegimmeslot(rel, NULL);
 
 retry:
 	found = false;
@@ -302,16 +305,13 @@ retry:
 	table_rescan(scan, NULL);
 
 	/* Try to find the tuple */
-	while ((scantuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while (table_scan_getnextslot(scan, ForwardScanDirection, scanslot))
 	{
-		HeapScanDesc hscan = (HeapScanDesc) scan;
-
-		if (!tuple_equals_slot(desc, scantuple, searchslot))
+		if (!tuples_equal(scanslot, searchslot))
 			continue;
 
 		found = true;
-		ExecStoreBufferHeapTuple(scantuple, outslot, hscan->rs_cbuf);
-		ExecMaterializeSlot(outslot);
+		ExecCopySlot(outslot, scanslot);
 
 		xwait = TransactionIdIsValid(snap.xmin) ?
 			snap.xmin : snap.xmax;
@@ -377,6 +377,7 @@ retry:
 	}
 
 	table_endscan(scan);
+	ExecDropSingleTupleTableSlot(scanslot);
 
 	return found;
 }

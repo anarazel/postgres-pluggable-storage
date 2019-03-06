@@ -62,6 +62,8 @@ typedef struct TableAmRoutine
 	void		(*scan_rescan) (TableScanDesc scan, struct ScanKeyData *key, bool set_params,
 								bool allow_strat, bool allow_sync, bool allow_pagemode);
 	void		(*scan_update_snapshot) (TableScanDesc scan, Snapshot snapshot);
+	TupleTableSlot *(*scan_getnextslot) (TableScanDesc scan,
+										 ScanDirection direction, TupleTableSlot *slot);
 
 
 	/* ------------------------------------------------------------------------
@@ -229,6 +231,13 @@ static inline void
 table_scan_update_snapshot(TableScanDesc scan, Snapshot snapshot)
 {
 	scan->rs_rd->rd_tableam->scan_update_snapshot(scan, snapshot);
+}
+
+static inline TupleTableSlot *
+table_scan_getnextslot(TableScanDesc sscan, ScanDirection direction, TupleTableSlot *slot)
+{
+	slot->tts_tableOid = RelationGetRelid(sscan->rs_rd);
+	return sscan->rs_rd->rd_tableam->scan_getnextslot(sscan, direction, slot);
 }
 
 

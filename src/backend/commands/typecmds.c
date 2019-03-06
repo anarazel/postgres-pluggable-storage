@@ -2363,14 +2363,15 @@ AlterDomainNotNull(List *names, bool notNull)
 			RelToCheck *rtc = (RelToCheck *) lfirst(rt);
 			Relation	testrel = rtc->rel;
 			TupleDesc	tupdesc = RelationGetDescr(testrel);
-			HeapTuple	tuple;
+			TupleTableSlot *slot;
 			TableScanDesc scan;
 			Snapshot	snapshot;
 
 			/* Scan all tuples in this relation */
 			snapshot = RegisterSnapshot(GetLatestSnapshot());
 			scan = table_beginscan(testrel, snapshot, 0, NULL);
-			while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+			slot = table_gimmegimmeslot(testrel, NULL);
+			while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 			{
 				int			i;
 
@@ -2380,7 +2381,7 @@ AlterDomainNotNull(List *names, bool notNull)
 					int			attnum = rtc->atts[i];
 					Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
 
-					if (heap_attisnull(tuple, attnum, tupdesc))
+					if (slot_attisnull(slot, attnum))
 					{
 						/*
 						 * In principle the auxiliary information for this
@@ -2399,6 +2400,7 @@ AlterDomainNotNull(List *names, bool notNull)
 					}
 				}
 			}
+			ExecDropSingleTupleTableSlot(slot);
 			table_endscan(scan);
 			UnregisterSnapshot(snapshot);
 
@@ -2777,14 +2779,15 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 		RelToCheck *rtc = (RelToCheck *) lfirst(rt);
 		Relation	testrel = rtc->rel;
 		TupleDesc	tupdesc = RelationGetDescr(testrel);
-		HeapTuple	tuple;
+		TupleTableSlot *slot;
 		TableScanDesc scan;
 		Snapshot	snapshot;
 
 		/* Scan all tuples in this relation */
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
 		scan = table_beginscan(testrel, snapshot, 0, NULL);
-		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+		slot = table_gimmegimmeslot(testrel, NULL);
+		while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 		{
 			int			i;
 
@@ -2797,7 +2800,7 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 				Datum		conResult;
 				Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
 
-				d = heap_getattr(tuple, attnum, tupdesc, &isNull);
+				d = slot_getattr(slot, attnum, &isNull);
 
 				econtext->domainValue_datum = d;
 				econtext->domainValue_isNull = isNull;
@@ -2827,6 +2830,7 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 
 			ResetExprContext(econtext);
 		}
+		ExecDropSingleTupleTableSlot(slot);
 		table_endscan(scan);
 		UnregisterSnapshot(snapshot);
 
