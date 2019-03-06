@@ -459,11 +459,9 @@ ExecSimpleRelationUpdate(EState *estate, EPQState *epqstate,
 	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	HeapTupleTableSlot *hsearchslot = (HeapTupleTableSlot *)searchslot;
-	HeapTupleTableSlot *hslot = (HeapTupleTableSlot *)slot;
 
-	/* We expect both searchslot and the slot to contain a heap tuple. */
+	/* We expect the searchslot to contain a heap tuple. */
 	Assert(TTS_IS_HEAPTUPLE(searchslot) || TTS_IS_BUFFERTUPLE(searchslot));
-	Assert(TTS_IS_HEAPTUPLE(slot) || TTS_IS_BUFFERTUPLE(slot));
 
 	/* For now we support only tables. */
 	Assert(rel->rd_rel->relkind == RELKIND_RELATION);
@@ -494,11 +492,11 @@ ExecSimpleRelationUpdate(EState *estate, EPQState *epqstate,
 		tuple = ExecFetchSlotHeapTuple(slot, true, NULL);
 
 		/* OK, update the tuple and index entries for it */
-		simple_heap_update(rel, &hsearchslot->tuple->t_self, hslot->tuple);
-		ItemPointerCopy(&hslot->tuple->t_self, &slot->tts_tid);
+		simple_heap_update(rel, &hsearchslot->tuple->t_self, tuple);
+		ItemPointerCopy(&tuple->t_self, &slot->tts_tid);
 
 		if (resultRelInfo->ri_NumIndices > 0 &&
-			!HeapTupleIsHeapOnly(hslot->tuple))
+			!HeapTupleIsHeapOnly(tuple))
 			recheckIndexes = ExecInsertIndexTuples(slot, &(tuple->t_self),
 												   estate, false, NULL,
 												   NIL);

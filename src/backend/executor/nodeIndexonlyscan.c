@@ -32,6 +32,7 @@
 
 #include "access/genam.h"
 #include "access/relscan.h"
+#include "access/tableam.h"
 #include "access/tupdesc.h"
 #include "access/visibilitymap.h"
 #include "executor/execdebug.h"
@@ -527,7 +528,7 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 	 */
 	tupDesc = ExecTypeFromTL(node->indextlist);
 	ExecInitScanTupleSlot(estate, &indexstate->ss, tupDesc,
-						  &TTSOpsBufferHeapTuple);
+						  table_slot_callbacks(currentRelation));
 
 	/*
 	 * Initialize result type and projection info.  The node's targetlist will

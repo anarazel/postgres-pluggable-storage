@@ -332,8 +332,7 @@ systable_beginscan(Relation heapRelation,
 
 	sysscan->heap_rel = heapRelation;
 	sysscan->irel = irel;
-	sysscan->slot = MakeSingleTupleTableSlot(RelationGetDescr(heapRelation),
-											 &TTSOpsBufferHeapTuple);
+	sysscan->slot = table_gimmegimmeslot(heapRelation, NULL);
 
 	if (snapshot == NULL)
 	{
@@ -546,8 +545,7 @@ systable_beginscan_ordered(Relation heapRelation,
 
 	sysscan->heap_rel = heapRelation;
 	sysscan->irel = indexRelation;
-	sysscan->slot = MakeSingleTupleTableSlot(RelationGetDescr(heapRelation),
-											 &TTSOpsBufferHeapTuple);
+	sysscan->slot = table_gimmegimmeslot(heapRelation, NULL);
 
 	if (snapshot == NULL)
 	{

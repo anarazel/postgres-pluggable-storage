@@ -1206,9 +1206,9 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 		HeapTuple	tuple;
 		ExprState  *partqualstate = NULL;
 		Snapshot	snapshot;
-		TupleDesc	tupdesc;
 		ExprContext *econtext;
 		TableScanDesc scan;
+		HeapScanDesc hscan;
 		MemoryContext oldCxt;
 		TupleTableSlot *tupslot;
 
@@ -1255,7 +1255,6 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 			continue;
 		}
 
-		tupdesc = CreateTupleDescCopy(RelationGetDescr(part_rel));
 		constr = linitial(def_part_constraints);
 		partition_constraint = (Expr *)
 			map_partition_varattnos((List *) constr,
@@ -1267,8 +1266,9 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 
 		econtext = GetPerTupleExprContext(estate);
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		tupslot = MakeSingleTupleTableSlot(tupdesc, &TTSOpsHeapTuple);
+		tupslot = table_gimmegimmeslot(part_rel, &estate->es_tupleTable);
 		scan = table_beginscan(part_rel, snapshot, 0, NULL);
+		hscan = (HeapScanDesc) scan;
 
 		/*
 		 * Switch to per-tuple memory context and reset it for each tuple
@@ -1278,7 +1278,7 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 
 		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 		{
-			ExecStoreHeapTuple(tuple, tupslot, false);
+			ExecStoreBufferHeapTuple(tuple, tupslot, hscan->rs_cbuf);
 			econtext->ecxt_scantuple = tupslot;
 
 			if (!ExecCheck(partqualstate, econtext))

@@ -108,6 +108,7 @@
 
 #include "access/genam.h"
 #include "access/relscan.h"
+#include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/index.h"
 #include "executor/executor.h"
@@ -706,8 +707,7 @@ check_exclusion_or_unique_constraint(Relation heap, Relation index,
 	 * to this slot.  Be sure to save and restore caller's value for
 	 * scantuple.
 	 */
-	existing_slot = MakeSingleTupleTableSlot(RelationGetDescr(heap),
-											 &TTSOpsBufferHeapTuple);
+	existing_slot = table_gimmegimmeslot(heap, NULL);
 
 	econtext = GetPerTupleExprContext(estate);
 	save_scantuple = econtext->ecxt_scantuple;

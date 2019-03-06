@@ -2416,6 +2416,7 @@ TupleHashIterator
 TupleHashTable
 TupleQueueReader
 TupleTableSlot
+TupleTableSlotOps
 TuplesortInstrumentation
 TuplesortMethod
 TuplesortSpaceType

@@ -2504,8 +2504,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 	 */
 	estate = CreateExecutorState();
 	econtext = GetPerTupleExprContext(estate);
-	slot = MakeSingleTupleTableSlot(RelationGetDescr(heapRelation),
-									&TTSOpsHeapTuple);
+	slot = table_gimmegimmeslot(heapRelation, NULL);
 
 	/* Arrange for econtext's scan tuple to be the tuple under test */
 	econtext->ecxt_scantuple = slot;
@@ -2871,7 +2870,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 		MemoryContextReset(econtext->ecxt_per_tuple_memory);
 
 		/* Set up for predicate or expression evaluation */
-		ExecStoreHeapTuple(heapTuple, slot, false);
+		ExecStoreBufferHeapTuple(heapTuple, slot, hscan->rs_cbuf);
 
 		/*
 		 * In a partial index, discard tuples that don't satisfy the
@@ -2972,6 +2971,7 @@ IndexCheckExclusion(Relation heapRelation,
 {
 	HeapTuple	heapTuple;
 	TableScanDesc scan;
+	HeapScanDesc hscan;
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
 	ExprState  *predicate;
@@ -2994,8 +2994,7 @@ IndexCheckExclusion(Relation heapRelation,
 	 */
 	estate = CreateExecutorState();
 	econtext = GetPerTupleExprContext(estate);
-	slot = MakeSingleTupleTableSlot(RelationGetDescr(heapRelation),
-									&TTSOpsHeapTuple);
+	slot = table_gimmegimmeslot(heapRelation, NULL);
 
 	/* Arrange for econtext's scan tuple to be the tuple under test */
 	econtext->ecxt_scantuple = slot;
@@ -3013,6 +3012,7 @@ IndexCheckExclusion(Relation heapRelation,
 								 NULL,	/* scan key */
 								 true,	/* buffer access strategy OK */
 								 true); /* syncscan OK */
+	hscan = (HeapScanDesc) scan;
 
 	while ((heapTuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
@@ -3021,7 +3021,7 @@ IndexCheckExclusion(Relation heapRelation,
 		MemoryContextReset(econtext->ecxt_per_tuple_memory);
 
 		/* Set up for predicate or expression evaluation */
-		ExecStoreHeapTuple(heapTuple, slot, false);
+		ExecStoreBufferHeapTuple(heapTuple, slot, hscan->rs_cbuf);
 
 		/*
 		 * In a partial index, ignore tuples that don't satisfy the predicate.

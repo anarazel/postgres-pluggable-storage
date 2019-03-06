@@ -940,8 +940,7 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 		indexScan = NULL;
 	}
 
-	slot = MakeSingleTupleTableSlot(RelationGetDescr(OldHeap),
-									&TTSOpsBufferHeapTuple);
+	slot = table_gimmegimmeslot(OldHeap, NULL);
 	hslot = (BufferHeapTupleTableSlot *) slot;
 
 	/* Log what we're doing */

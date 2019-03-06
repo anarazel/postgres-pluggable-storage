@@ -917,8 +917,7 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	 */
 	ExecInitScanTupleSlot(estate, &scanstate->ss,
 						  RelationGetDescr(currentRelation),
-						  &TTSOpsBufferHeapTuple);
-
+						  table_slot_callbacks(currentRelation));
 
 	/*
 	 * Initialize result type and projection.

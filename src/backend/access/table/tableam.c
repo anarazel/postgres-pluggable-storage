@@ -23,6 +23,45 @@ char	   *default_table_access_method = DEFAULT_TABLE_ACCESS_METHOD;
 bool		synchronize_seqscans = true;
 
 
+const TupleTableSlotOps *
+table_slot_callbacks(Relation relation)
+{
+	const TupleTableSlotOps *tts_cb;
+
+	if (relation->rd_tableam)
+		tts_cb = relation->rd_tableam->slot_callbacks(relation);
+	else
+	{
+		/*
+		 * These need to be supported, as some parts of the code (like COPY)
+		 * need to create slots for such relations too. It seems better to
+		 * centralize the knowledge that a heap slot is the right thing in
+		 * that case here.
+		 */
+		Assert(relation->rd_rel->relkind == RELKIND_VIEW ||
+			   relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
+			   relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
+		tts_cb = &TTSOpsHeapTuple;
+	}
+
+	return tts_cb;
+}
+
+TupleTableSlot *
+table_gimmegimmeslot(Relation relation, List **reglist)
+{
+	const TupleTableSlotOps *tts_cb;
+	TupleTableSlot *slot;
+
+	tts_cb = table_slot_callbacks(relation);
+	slot = MakeSingleTupleTableSlot(RelationGetDescr(relation), tts_cb);
+
+	if (reglist)
+		*reglist = lappend(*reglist, slot);
+
+	return slot;
+}
+
 /* ----------------
  *		table_beginscan_parallel - join a parallel scan
  *

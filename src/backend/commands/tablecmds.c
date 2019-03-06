@@ -8818,9 +8818,9 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	char	   *conbin;
 	Expr	   *origexpr;
 	ExprState  *exprstate;
-	TupleDesc	tupdesc;
 	HeapTuple	tuple;
 	TableScanDesc scan;
+	HeapScanDesc hscan;
 	ExprContext *econtext;
 	MemoryContext oldcxt;
 	TupleTableSlot *slot;
@@ -8855,12 +8855,12 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	exprstate = ExecPrepareExpr(origexpr, estate);
 
 	econtext = GetPerTupleExprContext(estate);
-	tupdesc = RelationGetDescr(rel);
-	slot = MakeSingleTupleTableSlot(tupdesc, &TTSOpsHeapTuple);
+	slot = table_gimmegimmeslot(rel, NULL);
 	econtext->ecxt_scantuple = slot;
 
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
 	scan = table_beginscan(rel, snapshot, 0, NULL);
+	hscan = (HeapScanDesc) scan;
 
 	/*
 	 * Switch to per-tuple memory context and reset it for each tuple
@@ -8870,7 +8870,8 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
-		ExecStoreHeapTuple(tuple, slot, false);
+		ExecStoreBufferHeapTuple(tuple, slot, hscan->rs_cbuf);
+
 
 		if (!ExecCheck(exprstate, econtext))
 			ereport(ERROR,

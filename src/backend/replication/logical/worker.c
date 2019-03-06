@@ -24,6 +24,7 @@
 #include "postgres.h"
 
 #include "access/table.h"
+#include "access/tableam.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "catalog/catalog.h"
@@ -698,10 +699,8 @@ apply_handle_update(StringInfo s)
 	estate = create_estate_for_relation(rel);
 	remoteslot = ExecInitExtraTupleSlot(estate,
 										RelationGetDescr(rel->localrel),
-										&TTSOpsHeapTuple);
-	localslot = ExecInitExtraTupleSlot(estate,
-									   RelationGetDescr(rel->localrel),
-									   &TTSOpsBufferHeapTuple);
+										&TTSOpsVirtual);
+	localslot = table_gimmegimmeslot(rel->localrel, &estate->es_tupleTable);
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
 
 	PushActiveSnapshot(GetTransactionSnapshot());
@@ -819,9 +818,7 @@ apply_handle_delete(StringInfo s)
 	remoteslot = ExecInitExtraTupleSlot(estate,
 										RelationGetDescr(rel->localrel),
 										&TTSOpsVirtual);
-	localslot = ExecInitExtraTupleSlot(estate,
-									   RelationGetDescr(rel->localrel),
-									   &TTSOpsBufferHeapTuple);
+	localslot = table_gimmegimmeslot(rel->localrel, &estate->es_tupleTable);
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
 
 	PushActiveSnapshot(GetTransactionSnapshot());
